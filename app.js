@@ -72,15 +72,19 @@ function migrate(d) {
   if (!Array.isArray(d.workouts)) out.workouts = d.workout ? [{ id: newId(), ...d.workout }] : [];
   delete out.workout;
   if (!Array.isArray(out.hiddenDefaults)) out.hiddenDefaults = [];
+  for (const h of Object.values(out.history || {})) {
+    if (Array.isArray(h.f)) h.f = h.f.map((x) => (Array.isArray(x) ? { n: x[0], g: x[1] } : x));
+  }
   return out;
 }
 
 let saveTimer = null;
+const foodPair = (x) => (Array.isArray(x) ? x : [x.n, x.g]);
 function recordToday() {
   const f = [];
   for (const it of S.today.items) {
     const food = getFood(it.foodId);
-    if (food && it.eaten) f.push([food.name, r1(itemG(it, food) * it.eaten)]);
+    if (food && it.eaten) f.push({ n: food.name, g: r1(itemG(it, food) * it.eaten) });
   }
   S.history[S.today.date] = { e: totals().eaten, t: target(), f };
   const keys = Object.keys(S.history).sort();
@@ -92,7 +96,10 @@ function save() {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(async () => {
     try { await setDoc(doc(db, "users", uid), S); }
-    catch (e) { console.error(e); toast("저장하지 못했어요. 인터넷 연결을 확인해 주세요."); }
+    catch (e) {
+      console.error(e);
+      toast(navigator.onLine === false ? "인터넷이 끊겨 있어요. 연결되면 다시 저장해요." : `저장하지 못했어요 (${e.code || e.message || "알 수 없는 오류"})`);
+    }
     syncPublic();
   }, 500);
 }
@@ -624,7 +631,7 @@ function friendHTML() {
     return `<span class="day ${w.p >= 100 ? "full" : ""}"><span class="col"><i style="height:${Math.min(100, w.p)}%"></i></span><b>${WD[d.getUTCDay()]}</b></span>`;
   }).join("");
   const foods = (dt.foods || []).length
-    ? `<ul class="cal-foods">${dt.foods.map(([n, g]) => `<li><span>${esc(n)}</span><span>${fmtG(g)}g</span></li>`).join("")}</ul>`
+    ? `<ul class="cal-foods">${dt.foods.map(foodPair).map(([n, g]) => `<li><span>${esc(n)}</span><span>${fmtG(g)}g</span></li>`).join("")}</ul>`
     : `<p class="muted small">아직 오늘 먹은 식품이 없어요.</p>`;
   return `${top}
     ${dt.weight ? `<div class="fd-profile">
@@ -671,7 +678,7 @@ function historyHTML() {
   else {
     const pct = h.t ? Math.round((h.e / h.t) * 100) : 0;
     detail = `<p class="cal-sum"><b>${fmtG(h.e)}g</b> / ${h.t}g <span class="${pct >= 100 ? "ok" : ""}">${pct}%</span></p>
-      ${h.f && h.f.length ? `<ul class="cal-foods">${h.f.map(([n, g]) => `<li><span>${esc(n)}</span><span>${fmtG(g)}g</span></li>`).join("")}</ul>` : `<p class="muted small">이 날은 먹은 식품 목록이 남아 있지 않아요.</p>`}`;
+      ${h.f && h.f.length ? `<ul class="cal-foods">${h.f.map(foodPair).map(([n, g]) => `<li><span>${esc(n)}</span><span>${fmtG(g)}g</span></li>`).join("")}</ul>` : `<p class="muted small">이 날은 먹은 식품 목록이 남아 있지 않아요.</p>`}`;
   }
   const s = streakInfo();
   const curYm = todayK.slice(0, 6);
