@@ -247,12 +247,45 @@ function softRender() {
 const todayMeals = () => (meals.days || {})[S?.today?.date || dateKey()] || {};
 const mealsOn = (k) => (meals.days || {})[k] || {};
 
+const num = (v, lo, hi) => { const n = Number(v); return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : 0; };
+const str = (v, max) => (typeof v === "string" ? v : v == null ? "" : String(v)).slice(0, max);
+function cleanPublic(id, d) {
+  const out = { id: str(id, 64), nickname: str(d.nickname, 20) || "친구", date: str(d.date, 8),
+    pct: Math.round(num(d.pct, 0, 999)), streak: Math.round(num(d.streak, 0, 9999)), detail: null };
+  const dt = d.detail;
+  if (dt && typeof dt === "object") {
+    out.detail = {
+      e: r1(num(dt.e, 0, 9999)), t: Math.round(num(dt.t, 0, 9999)), best: Math.round(num(dt.best, 0, 9999)),
+      weight: dt.weight == null ? null : r1(num(dt.weight, 0, 500)) || null,
+      goal: str(dt.goal, 12), factor: r1(num(dt.factor, 0, 10)),
+      foods: (Array.isArray(dt.foods) ? dt.foods : []).slice(0, 60).map((x) => {
+        const [n, g] = foodPair(x && typeof x === "object" ? x : {});
+        return { n: str(n, 40), g: r1(num(g, 0, 9999)) };
+      }),
+      week: (Array.isArray(dt.week) ? dt.week : []).slice(0, 7)
+        .filter((w) => w && /^\d{8}$/.test(String(w.k))).map((w) => ({ k: String(w.k), p: Math.round(num(w.p, 0, 999)) })),
+    };
+  }
+  return out;
+}
+function cleanShared(id, d) {
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) return null;
+  const protein = r1(num(d.protein, 0, 200));
+  const name = str(d.name, 30).trim();
+  if (!name || !protein) return null;
+  return {
+    id: `s:${id}`, docId: id, name, protein, serving: str(d.serving, 20) || "1개",
+    kind: KINDS[d.kind] ? d.kind : "normal", by: str(d.by, 64), byName: str(d.byName, 20), createdAt: num(d.createdAt, 0, 1e15),
+  };
+}
+const sharedFrom = (snap) => snap.docs.map((x) => cleanShared(x.id, x.data())).filter(Boolean)
+  .sort((a, b) => b.createdAt - a.createdAt);
+const friendsFrom = (snap) => snap.docs.map((x) => cleanPublic(x.id, x.data())).filter((f) => f.id !== uid);
 async function fetchShared() {
   try {
     const col = collection(db, "sharedFoods");
     const snap = navigator.onLine === false ? await getDocsFromCache(col).catch(() => getDocs(col)) : await getDocs(col);
-    sharedFoods = snap.docs.map((d) => ({ ...d.data(), docId: d.id, id: `s:${d.id}` }))
-      .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+    sharedFoods = sharedFrom(snap);
     sharedState = "ok";
   } catch (e) { console.warn("shared", e); sharedState = "error"; }
 }
@@ -260,7 +293,7 @@ async function loadFriends() {
   if (!S?.shareProgress) { friends = []; friendsState = "idle"; updateFriends(); return; }
   try {
     const snap = await getDocs(query(collection(db, "public"), where("date", "==", dateKey())));
-    friends = snap.docs.map((d) => ({ id: d.id, ...d.data() })).filter((f) => f.id !== uid);
+    friends = friendsFrom(snap);
     friends.unshift({ id: uid, ...myPublic() });
     friendsState = "ok";
   } catch (e) { console.warn("friends", e); friendsState = "error"; }
@@ -285,7 +318,7 @@ function watchFriends() {
   if (!S?.shareProgress || !uid) { friends = []; friendsState = "idle"; updateFriends(); return; }
   friendsDay = day;
   unsubFriends = onSnapshot(query(collection(db, "public"), where("date", "==", day)), (snap) => {
-    friends = snap.docs.map((d) => ({ id: d.id, ...d.data() })).filter((f) => f.id !== uid);
+    friends = friendsFrom(snap);
     friends.unshift({ id: uid, ...myPublic() });
     friendsState = "ok";
     updateFriends();
@@ -296,8 +329,7 @@ let unsubShared = null;
 function watchShared() {
   if (unsubShared) return;
   unsubShared = onSnapshot(collection(db, "sharedFoods"), (snap) => {
-    sharedFoods = snap.docs.map((d) => ({ ...d.data(), docId: d.id, id: `s:${d.id}` }))
-      .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+    sharedFoods = sharedFrom(snap);
     sharedState = "ok";
     if (!S) return;
     if (S.today.items.some((i) => i.foodId.startsWith("s:"))) { softRender(); return; }
@@ -706,7 +738,7 @@ function planHTML() {
     if (gap > 0) {
       const sug = suggest(gap);
       summary = `<div class="plan-sum warn"><p>체크리스트를 다 먹어도 목표보다 <strong>${fmtG(gap)}g</strong> 부족해요.${sug.length ? " 이렇게 채울 수 있어요." : ""}</p>
-        ${sug.length ? `<div class="chips">${sug.map((s) => `<button class="chip" data-act="add-food" data-id="${s.f.id}" data-n="${s.n}">${esc(s.f.name)}${s.n > 1 ? ` ×${s.n}` : ""} 담기 <span>+${fmtG(s.f.protein * s.n)}g</span></button>`).join("")}</div>` : ""}</div>`;
+        ${sug.length ? `<div class="chips">${sug.map((s) => `<button class="chip" data-act="add-food" data-id="${esc(s.f.id)}" data-n="${s.n}">${esc(s.f.name)}${s.n > 1 ? ` ×${s.n}` : ""} 담기 <span>+${fmtG(s.f.protein * s.n)}g</span></button>`).join("")}</div>` : ""}</div>`;
     } else summary = `<div class="plan-sum ok"><p>체크리스트를 다 먹으면 목표를 채워요.</p></div>`;
   }
   return `${nightHTML()}<div class="sec-head"><h2>오늘의 추천</h2><button class="link" data-act="open-info">추천 기준</button></div>
@@ -750,7 +782,7 @@ function checklistHTML() {
   if (!items.length) {
     const r = S.routines;
     empty = `<div class="empty"><p>아직 담은 식품이 없어요.${S.lastItems.length || r.length ? " 한 번에 불러올 수도 있어요." : ""}</p>
-      ${S.lastItems.length || r.length ? `<div class="chips">${S.lastItems.length ? `<button class="chip" data-act="load-last">지난번 목록 불러오기</button>` : ""}${r.map((x) => `<button class="chip" data-act="load-routine" data-id="${x.id}">${esc(x.name)}</button>`).join("")}</div>` : ""}</div>`;
+      ${S.lastItems.length || r.length ? `<div class="chips">${S.lastItems.length ? `<button class="chip" data-act="load-last">지난번 목록 불러오기</button>` : ""}${r.map((x) => `<button class="chip" data-act="load-routine" data-id="${esc(x.id)}">${esc(x.name)}</button>`).join("")}</div>` : ""}</div>`;
   }
   const { planned } = totals();
   return `<div class="sec-head"><div><h2>오늘 먹을 것</h2><p class="sec-sub">${items.length ? `식품 ${items.length}가지, 다 먹으면 ${fmtG(planned)}g` : "아래 목록에서 골라 담아요"}</p></div>
@@ -797,12 +829,12 @@ function foodRowsHTML() {
     const kind = f.kind === "fast" ? `<span class="tag soft">빠른 흡수</span>` : f.kind === "slow" ? `<span class="tag soft">천천히 흡수</span>` : "";
     const btn = f.kind === "meal" && inList
       ? `<button class="btn add in" disabled>담김</button>`
-      : `<button class="btn add ${inList ? "in" : ""}" data-act="add-food" data-id="${f.id}" data-n="1" aria-label="${esc(f.name)} 담기">${inList ? `담김 ${inList.qty}` : "담기"}</button>`;
+      : `<button class="btn add ${inList ? "in" : ""}" data-act="add-food" data-id="${esc(f.id)}" data-n="1" aria-label="${esc(f.name)} 담기">${inList ? `담김 ${inList.qty}` : "담기"}</button>`;
     return `<li class="food">
       <div class="food-main"><span class="food-name">${esc(f.name)}</span>${tag}${kind}<span class="food-meta">${esc(f.serving)}${f.source === "shared" ? `, ${esc(f.byName || "친구")}${f.by === uid ? " (나)" : ""}` : ""}</span></div>
-      ${f.source === "custom" ? `<span class="food-edit"><button class="link" data-act="edit-food" data-id="${f.id}">수정</button><button class="link danger" data-act="del-food" data-id="${f.id}">삭제</button></span>`
-        : f.source === "shared" && f.by === uid ? `<span class="food-edit"><button class="link danger" data-act="del-shared" data-id="${f.id}">삭제</button></span>`
-        : f.source === "default" ? `<span class="food-edit"><button class="link danger" data-act="hide-default" data-id="${f.id}">삭제</button></span>` : `<span class="food-edit"></span>`}
+      ${f.source === "custom" ? `<span class="food-edit"><button class="link" data-act="edit-food" data-id="${esc(f.id)}">수정</button><button class="link danger" data-act="del-food" data-id="${esc(f.id)}">삭제</button></span>`
+        : f.source === "shared" && f.by === uid ? `<span class="food-edit"><button class="link danger" data-act="del-shared" data-id="${esc(f.id)}">삭제</button></span>`
+        : f.source === "default" ? `<span class="food-edit"><button class="link danger" data-act="hide-default" data-id="${esc(f.id)}">삭제</button></span>` : `<span class="food-edit"></span>`}
       <span class="food-g">${fmtG(f.protein)}g</span>
       ${btn}
     </li>`;
@@ -1094,9 +1126,9 @@ function routinesHTML() {
   const list = S.routines.map((r) => {
     const auto = S.rollover === "routine" && S.autoRoutineId === r.id;
     return `<li><div class="r-main"><strong>${esc(r.name)}</strong><span class="muted">식품 ${r.items.length}개, ${fmtG(g(r))}g</span></div>
-      <button class="btn small" data-act="load-routine" data-id="${r.id}">담기</button>
-      <button class="toggle ${auto ? "on" : ""}" data-act="auto-routine" data-id="${r.id}" aria-pressed="${auto}">매일 자동</button>
-      <button class="link danger" data-act="del-routine" data-id="${r.id}">삭제</button></li>`;
+      <button class="btn small" data-act="load-routine" data-id="${esc(r.id)}">담기</button>
+      <button class="toggle ${auto ? "on" : ""}" data-act="auto-routine" data-id="${esc(r.id)}" aria-pressed="${auto}">매일 자동</button>
+      <button class="link danger" data-act="del-routine" data-id="${esc(r.id)}">삭제</button></li>`;
   }).join("");
   return `<h2>루틴</h2>
     <p class="muted">자주 먹는 체크리스트를 저장해 두고 한 번에 담아요.</p>
@@ -1249,7 +1281,8 @@ $app.addEventListener("click", async (e) => {
     }
     case "meal-all": ["1", "2", "3"].forEach((c) => mealFood(c) && addToList(`meal:${c}`)); return commit("급식을 담았어요");
     case "dot": {
-      const it = items[i]; const k = Number(b.dataset.k);
+      const it = items?.[i]; const k = Number(b.dataset.k);
+      if (!it) return;
       const was = totals().eaten;
       it.eaten = k < it.eaten ? k : k + 1;
       if (it.pre) { it.pre = Math.min(it.pre, it.eaten); if (!it.pre) delete it.pre; }
@@ -1271,15 +1304,17 @@ $app.addEventListener("click", async (e) => {
       return commit(`저녁 이후 ${n}개를 먹은 걸로 체크했어요`, true);
     }
     case "ydot": {
-      const it = S.yesterday.items[i]; const k = Number(b.dataset.k);
+      const it = S.yesterday?.items?.[i]; const k = Number(b.dataset.k);
+      if (!it) return;
       it.eaten = k < it.eaten ? k : k + 1;
       if (it.pre) { it.pre = Math.min(it.pre, it.eaten); if (!it.pre) delete it.pre; }
       ydayRecalc();
       return commit();
     }
-    case "yday-done": S.yesterday.done = true; return commit("어제 기록을 마무리했어요");
+    case "yday-done": if (!S.yesterday) return; S.yesterday.done = true; return commit("어제 기록을 마무리했어요");
     case "portion": {
-      const it = items[i];
+      const it = items?.[i];
+      if (!it) return;
       const p = Math.max(0.5, Math.min(2, (it.portion || 1) + Number(b.dataset.d)));
       if (p === 1) delete it.portion; else it.portion = p;
       return commit();
@@ -1287,7 +1322,7 @@ $app.addEventListener("click", async (e) => {
     case "meal-day": ui.mealDay = Number(b.dataset.d); return render();
     case "share-on": S.shareProgress = true; commit("이제 친구들과 달성률을 같이 봐요"); watchFriends(); return;
     case "friend-detail": ui.modal = { type: "friend", id: b.dataset.id, back: ui.modal?.type === "friends" ? ui.modal : null }; return render();
-    case "open-friends": ui.modal = { type: "friends" }; loadFriends(); return render();
+    case "open-friends": ui.modal = { type: "friends" }; if (!unsubFriends) loadFriends(); return render();
     case "back-modal": ui.modal = ui.modal.back; return render();
     case "refresh-friends": friendsState = "idle"; return loadFriends();
     case "open-history": ui.modal = { type: "history", ym: S.today.date.slice(0, 6), sel: S.today.date }; return render();
@@ -1301,13 +1336,14 @@ $app.addEventListener("click", async (e) => {
       return render();
     }
     case "qty": {
-      const it = items[i];
+      const it = items?.[i];
+      if (!it) return;
       it.qty = Math.max(1, Math.min(20, it.qty + Number(b.dataset.d)));
       it.eaten = Math.min(it.eaten, it.qty);
       if (it.pre) { it.pre = Math.min(it.pre, it.eaten); if (!it.pre) delete it.pre; }
       return commit();
     }
-    case "remove": { snapshot(); const f = getFood(items[i].foodId); items.splice(i, 1); return commit(`${eul(f ? f.name : "식품")} 뺐어요`, true); }
+    case "remove": { if (!items?.[i]) return; snapshot(); const f = getFood(items[i].foodId); items.splice(i, 1); return commit(`${eul(f ? f.name : "식품")} 뺐어요`, true); }
     case "clear": snapshot(); S.today.items = []; return commit("체크리스트를 비웠어요", true);
     case "load-last": mergeItems(S.lastItems); return commit("지난번 목록을 담았어요");
     case "load-routine": { const r = S.routines.find((x) => x.id === b.dataset.id); if (r) { mergeItems(r.items); ui.modal = null; commit(`‘${r.name}’ 루틴을 담았어요`); } return; }
@@ -1330,13 +1366,14 @@ $app.addEventListener("click", async (e) => {
         return commit("수정한 내용을 저장했어요");
       }
       if (document.getElementById("af-share")?.checked) {
+        if (navigator.onLine === false) { err.textContent = "공유는 인터넷이 연결됐을 때만 할 수 있어요."; return; }
         if (b.disabled) return;
         b.disabled = true;
         const ref = doc(collection(db, "sharedFoods"));
         const data = { name, protein: r1(protein), serving, kind, by: uid, byName: S.nickname, createdAt: Date.now() };
         try { await setDoc(ref, data); }
         catch (e2) { console.warn(e2); b.disabled = false; err.textContent = "공유하지 못했어요. Firestore 규칙을 새로 게시했는지 확인해 주세요."; return; }
-        sharedFoods.unshift({ ...data, docId: ref.id, id: `s:${ref.id}` });
+        if (!sharedFoods.some((x) => x.docId === ref.id)) sharedFoods.unshift(cleanShared(ref.id, data));
         ui.addOpen = false; ui.filter = "shared"; ui.query = "";
         return commit(`${eul(name)} 친구들과 공유했어요`);
       }
@@ -1347,9 +1384,11 @@ $app.addEventListener("click", async (e) => {
     case "del-shared": {
       const f = sharedFoods.find((x) => x.id === b.dataset.id);
       if (!f || f.by !== uid) return;
+      if (navigator.onLine === false) { toast("공유한 식품은 인터넷이 연결됐을 때만 지울 수 있어요."); return; }
       snapshot();
       const restoreS = undoFn;
-      const { id: _id, docId, ...data } = f;
+      const { docId } = f;
+      const data = { name: f.name, protein: f.protein, serving: f.serving, kind: f.kind, by: f.by, byName: f.byName, createdAt: f.createdAt };
       sharedFoods = sharedFoods.filter((x) => x.id !== f.id);
       const keep = (x) => x.foodId !== f.id;
       S.today.items = S.today.items.filter(keep);
@@ -1359,7 +1398,7 @@ $app.addEventListener("click", async (e) => {
       catch (e2) { console.warn(e2); toast("지우지 못했어요. 인터넷 연결을 확인해 주세요."); sharedFoods.unshift(f); return render(); }
       commit(`공유한 ${eul(f.name)} 지웠어요`, true);
       undoFn = async () => {
-        try { await setDoc(doc(db, "sharedFoods", docId), data); sharedFoods.unshift(f); } catch (e3) { console.warn(e3); }
+        try { await setDoc(doc(db, "sharedFoods", docId), data); if (!sharedFoods.some((x) => x.id === f.id)) sharedFoods.unshift(f); } catch (e3) { console.warn(e3); }
         restoreS();
       };
       return;
@@ -1498,12 +1537,10 @@ $app.addEventListener("click", async (e) => {
         workouts.push({ id: w.id, start: w.start, duration: Math.round(dur) });
       }
       workouts.sort((a, b) => parseTime(a.start) - parseTime(b.start));
+      const cf = parseFloat(d.customFactor);
+      if (d.goal === "custom" && !(cf >= CF_MIN && cf <= CF_MAX)) { err.textContent = `직접 입력 숫자는 ${CF_MIN}–${CF_MAX} 사이로 적어 주세요.`; return; }
+      if (d.goal === "custom") S.customFactor = r1(cf);
       S.nickname = d.nick.trim() || S.nickname;
-      if (d.goal === "custom") {
-        const cf = parseFloat(d.customFactor);
-        if (!(cf >= CF_MIN && cf <= CF_MAX)) { err.textContent = `직접 입력 숫자는 ${CF_MIN}–${CF_MAX} 사이로 적어 주세요.`; return; }
-        S.customFactor = r1(cf);
-      }
       const shareChanged = S.shareProgress !== d.share || S.shareDetail !== (d.share && d.detail);
       S.shareProgress = d.share;
       S.cutoff = d.cutoff || null;
