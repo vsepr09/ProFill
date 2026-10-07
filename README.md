@@ -1,100 +1,118 @@
 # ProFill
 
-헬스하는 친구들을 위한 하루 단백질 목표 채우기 사이트예요. 무료로 운영돼요.
+하루 단백질 목표를 정하고, 먹을 때마다 체크해서 채우는 헬스인용 단백질 트래커예요.
 
-- GitHub Pages: 사이트를 올려 두는 곳
-- Firebase: 계정과 기록 저장
-- GitHub Actions: 매일 자정 나이스에서 학교 급식 받아오기
+**사이트 바로가기: https://vsepr09.github.io/ProFill/**
 
-아이패드 Safari만으로 모두 설정할 수 있어요.
+인천과학예술영재학교 학생들이 함께 쓰려고 만들었어요. 학교 급식의 단백질 정보를 매일 자동으로 받아와서, 급식과 내가 따로 챙겨 먹는 보충제를 한 화면에서 관리할 수 있어요.
 
-## 1. GitHub에 올리기
+## 이런 문제를 풀어요
 
-1. github.com에 가입하고 오른쪽 위 **+ > New repository**로 저장소를 만들어요. 이름 예: `protein`, **Public** 선택.
-2. 저장소에서 **Add file > Upload files**를 누르고, 압축을 푼 폴더 안의 파일을 모두 골라 올려요.
-   `index.html`, `style.css`, `app.js`, `data.js`, `firebase-config.js`, `fetch_meals.py`, `firestore.rules`, `README.md`
-3. `.github` 폴더는 아이패드 파일 앱에서 숨겨져 안 보일 수 있어요. 그래서 직접 만들어요.
-   **Add file > Create new file**에서 이름 칸에 `.github/workflows/deploy.yml`을 입력하고, 압축 파일 안의 같은 파일 내용(아래 부록에도 있음)을 붙여 넣고 **Commit changes**.
+운동하는 사람은 하루 단백질을 얼마나 먹어야 하는지는 대충 알아도, 오늘 실제로 얼마나 먹었는지, 남은 양을 언제 무엇으로 채워야 하는지는 매번 계산하기 번거로워요. 기숙사 생활을 하면 급식이 하루 식사의 대부분인데, 급식에 단백질이 얼마나 들어 있는지도 따로 찾아봐야 하죠.
 
-## 2. Firebase 설정 (계정과 저장)
+ProFill은 이걸 세 단계로 줄여요.
 
-1. console.firebase.google.com에서 **프로젝트 추가** (애널리틱스는 꺼도 돼요).
-2. **빌드 > Authentication > 시작하기 > 이메일/비밀번호 > 사용 설정 > 저장**.
-   (사이트에서는 아이디만 쓰지만, 안에서는 `아이디@iasa-protein.app` 형식으로 저장돼요. 메일은 보내지 않아요.)
-3. **빌드 > Firestore Database > 데이터베이스 만들기**. 위치는 `asia-northeast3 (서울)`, **프로덕션 모드**.
-4. Firestore의 **규칙** 탭에 `firestore.rules` 내용을 붙여 넣고 **게시**.
-5. 프로젝트 설정(톱니바퀴) > **내 앱 > 웹(</>)** 으로 앱을 등록하면 `firebaseConfig` 값이 나와요.
-   GitHub에서 `firebase-config.js`를 열고 연필 아이콘으로 수정해서 값을 붙여 넣은 뒤 커밋해요.
-6. **Authentication > 설정 > 승인된 도메인 > 도메인 추가**에 `내GitHub아이디.github.io`를 넣어요.
+1. 몸무게와 목표를 한 번 입력하면 하루 단백질 목표가 정해져요.
+2. 오늘 먹을 식품(급식 포함)을 체크리스트에 담으면, 언제 무엇을 먹을지 시간대별로 추천해 줘요.
+3. 먹을 때마다 체크하면 화면 맨 위 bar가 채워져요.
 
-## 3. 나이스 급식 인증키
+## 주요 기능
 
-1. open.neis.go.kr에 가입하고 **마이페이지 > 인증키 발급**을 받아요 (무료).
-2. GitHub 저장소 **Settings > Secrets and variables > Actions > New repository secret**
-   - Name: `NEIS_KEY`
-   - Secret: 발급받은 인증키
+**단백질 bar**
+화면 맨 위에 오늘 먹은 단백질이 식품별 색깔 칸으로 쌓여요. 목표선, 체크리스트를 다 먹었을 때의 예상량, 최근 7일 달성 기록도 함께 보여요.
 
-학교는 `인천과학예술영재학교`(인천광역시교육청)로 자동 검색돼요.
+**목표 설정**
+유지(체중 1kg당 1.4g), 근육 증가(1.6g), 체지방 감량(2.2g) 중에서 고르거나, 0.8–3.5g 사이에서 원하는 숫자를 직접 입력할 수 있어요. 각 숫자의 근거는 사이트 안 '추천 기준'에서 볼 수 있어요.
 
-## 4. 사이트 켜기
+**오늘의 추천**
+체크리스트에 담은 식품을 아침(08:00), 점심(12:40), 저녁(18:20), 자기 전(23:00)에 나눠 배치해요. 끼니 간격이 5시간 넘게 벌어지면 간식 시간을 넣어요. 운동 시간을 입력하면 운동 직후 시간대가 생기고, 쉐이크처럼 빨리 흡수되는 단백질이 거기 먼저 배치돼요. 자기 전에는 우유나 카제인처럼 천천히 흡수되는 단백질이 먼저 들어가요. 계획대로 먹어도 목표가 부족하면, 무엇을 몇 개 더 담으면 되는지 버튼으로 알려 줘요.
 
-1. 저장소 **Settings > Pages > Build and deployment > Source**를 **GitHub Actions**로 바꿔요.
-2. **Actions** 탭 > `급식 받고 사이트 배포` > **Run workflow**.
-3. 초록색 체크가 뜨면 `https://내GitHub아이디.github.io/protein/` 주소로 들어가요.
-4. Safari 공유 버튼 > **홈 화면에 추가**를 하면 앱처럼 쓸 수 있어요.
+**오늘 급식**
+나이스(NEIS) 교육정보 개방 포털에서 오늘 아침, 점심, 저녁 메뉴와 단백질 g수를 받아와요. 버튼 한 번으로 체크리스트에 담을 수 있어요.
 
-이후로는 매일 00:05와 06:00(한국 시간)에 급식을 새로 받아 자동으로 다시 배포돼요.
+**식품 목록**
+닭가슴살, 계란, 프로틴 쉐이크 등 기본 식품 16가지가 들어 있어요. 내가 먹는 보충제나 간식은 이름, 단백질 g수, 1회 양, 흡수 속도를 적어 직접 추가할 수 있어요. 필요 없는 기본 식품은 지울 수 있고, 나중에 다시 되살릴 수 있어요.
 
-## 알아 두기
+**체크리스트와 루틴**
+식품마다 개수를 조절하고, 하나 먹을 때마다 동그라미를 눌러 체크해요. 자주 먹는 조합은 루틴으로 저장해 두고 한 번에 담을 수 있어요.
 
-- **비밀번호 찾기가 없어요.** 친구가 비밀번호를 잊으면 Firebase 콘솔 > Authentication에서 그 사용자를 삭제하고, Firestore에서 같은 UID 문서를 지운 뒤 다시 가입하면 돼요.
-- **급식이 안 보이면** Actions 탭에서 최근 실행 기록을 눌러 `급식 정보 받기` 단계의 메시지를 확인해요. 인증키가 틀렸거나, 학교가 나이스에 그날 급식을 올리지 않은 경우예요. 급식 파일(`data/meals.json`)은 배포할 때마다 새로 만들어져서 저장소에는 보이지 않는 게 정상이에요.
-- 학교 홈페이지 급식표는 나이스와 같은 자료를 쓰지만, 혹시 나이스에 아침·저녁이 빠져 있다면 알려 줘요. 학교 홈페이지에서 직접 읽어 오는 방식으로 바꿀 수 있어요.
-- GitHub는 저장소에 60일 동안 변화가 없으면 예약 실행을 멈춰요. 멈추면 Actions 탭에서 다시 켜 주세요.
-- 기본 식품 목록은 `data.js`에서 고칠 수 있어요.
-- 목표 계산 기준과 출처는 사이트의 **추천 기준** 버튼에 있어요.
+**자정 자동 초기화**
+자정이 지나면 bar와 체크리스트가 새로 시작돼요. 설정에서 다음 날 체크리스트를 '비우기', '전날 목록 그대로', '매일 자동 루틴으로 채우기' 중에서 고를 수 있어요.
 
-## 부록: `.github/workflows/deploy.yml`
+**그 밖에**
+- 계정마다 기록이 따로 저장돼서 여러 기기에서 이어서 쓸 수 있어요.
+- 라이트 모드와 다크 모드를 고를 수 있어요.
+- 확인창 없이 바로 동작하고, 지운 것은 5초 안에 '되돌리기'로 복구할 수 있어요.
+- 아이패드, 휴대폰, 컴퓨터 화면 모두에 맞춰져 있어요.
 
-```yaml
-name: 급식 받고 사이트 배포
+## 목표 숫자의 근거
 
-on:
-  push:
-    branches: [main]
-  schedule:
-    - cron: "5 15 * * *"   # 매일 00:05 (한국 시간)
-    - cron: "0 21 * * *"   # 매일 06:00 (한국 시간) 한 번 더
-  workflow_dispatch:
+| 목표 | 체중 1kg당 | 근거 |
+|---|---|---|
+| 유지 | 1.4g | 운동하는 사람 대부분은 하루 1.4–2.0g/kg이면 충분 (ISSN, 2017) |
+| 근육 증가 | 1.6g | 약 1.6g/kg을 넘기면 근육 증가 효과가 더 커지지 않음 (Morton 외, 2018) |
+| 체지방 감량 | 2.2g | 감량 중에는 제지방 1kg당 2.3–3.1g 권장 (Helms 외, 2014), 이를 체중 기준으로 환산 |
 
-permissions:
-  contents: read
-  pages: write
-  id-token: write
+시간대별 추천은 "한 번에 20–40g씩, 3–4시간 간격으로 고르게"라는 ISSN 권고를 따라요.
 
-concurrency:
-  group: pages
-  cancel-in-progress: true
+- [ISSN Position Stand: protein and exercise (2017)](https://pmc.ncbi.nlm.nih.gov/articles/PMC5477153/)
+- [Morton 외, British Journal of Sports Medicine (2018)](https://pubmed.ncbi.nlm.nih.gov/28698222/)
+- [Helms 외, IJSNEM (2014)](https://pubmed.ncbi.nlm.nih.gov/24092765/)
 
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: 급식 정보 받기
-        run: python fetch_meals.py
-        env:
-          NEIS_KEY: ${{ secrets.NEIS_KEY }}
-      - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: .
-      - id: deployment
-        uses: actions/deploy-pages@v4
-```
+연구는 대부분 성인을 대상으로 했어요. 건강 문제가 있다면 먼저 전문가와 상의해 주세요. 기본 식품의 단백질 양은 대략적인 값이니, 실제 제품은 포장지 표기를 확인해 주세요.
+
+## 어떻게 만들어졌나요
+
+서버 없이 무료 서비스만으로 운영돼요.
+
+| 역할 | 사용한 것 |
+|---|---|
+| 화면 | HTML, CSS, JavaScript (프레임워크 없음) |
+| 사이트 호스팅 | GitHub Pages |
+| 계정, 기록 저장 | Firebase Authentication, Cloud Firestore |
+| 급식 정보 | 나이스 교육정보 개방 포털 API |
+| 자동 갱신 | GitHub Actions (매일 00:05, 06:00 한국 시간) |
+
+GitHub Actions가 매일 나이스에서 급식 정보를 받아 `data/meals.json`을 만들고, 사이트와 함께 GitHub Pages에 배포해요. 그래서 급식 파일은 저장소에는 보이지 않아요.
+
+### 파일 구성
+
+| 파일 | 내용 |
+|---|---|
+| `index.html` | 페이지 뼈대 |
+| `app.js` | 화면 그리기, 추천 계산, 로그인과 저장 |
+| `style.css` | 디자인 (라이트/다크 테마 포함) |
+| `data.js` | 목표별 숫자와 기본 식품 목록 |
+| `firebase-config.js` | Firebase 프로젝트 연결 정보 |
+| `fetch_meals.py` | 나이스에서 급식 정보를 받는 스크립트 |
+| `firestore.rules` | 각자 자기 기록만 읽고 쓸 수 있게 하는 보안 규칙 |
+| `.github/workflows/deploy.yml` | 급식 받기와 사이트 배포 자동화 |
+
+### 보안과 개인정보
+
+- 로그인은 아이디와 비밀번호로만 해요. 이메일이나 실명은 받지 않아요.
+- Firestore 보안 규칙으로 각 사용자는 자기 기록만 읽고 쓸 수 있어요.
+- `firebase-config.js`의 `apiKey`는 Firebase 웹 앱에서 원래 공개되는 값이에요. 비밀번호가 아니라 프로젝트를 구분하는 용도예요.
+
+## 우리 학교용으로 직접 만들어 보기
+
+다른 학교에서 쓰고 싶다면 이 저장소를 Fork해서 직접 배포할 수 있어요.
+
+1. **Fork**: 이 저장소를 내 계정으로 Fork해요.
+2. **Firebase**
+   - console.firebase.google.com에서 프로젝트를 만들어요.
+   - Authentication에서 '이메일/비밀번호' 로그인을 켜요.
+   - Firestore Database를 만들고(위치: 서울), 규칙 탭에 `firestore.rules` 내용을 붙여 넣어 게시해요.
+   - 프로젝트 설정에서 웹 앱을 등록하고, 나온 값을 `firebase-config.js`에 붙여 넣어요.
+   - Authentication > 설정 > 승인된 도메인에 `내아이디.github.io`를 추가해요.
+3. **나이스 인증키**
+   - open.neis.go.kr에서 인증키를 발급받아요.
+   - 저장소 Settings > Secrets and variables > Actions에 `NEIS_KEY`라는 이름으로 넣어요.
+4. **학교 바꾸기**: `fetch_meals.py` 위쪽의 `SCHOOL_NAME`(학교 이름)과 `ATPT_CODE`(시도교육청 코드)를 우리 학교로 바꿔요. 급식 시간은 `app.js`의 `buildPlan` 함수에서 바꿀 수 있어요.
+5. **배포**: Settings > Pages > Source를 'GitHub Actions'로 바꾸고, Actions 탭에서 워크플로를 한 번 실행해요.
+
+### 알아 두기
+
+- 비밀번호 찾기 기능이 없어요. 비밀번호를 잊었다면 관리자가 Firebase 콘솔에서 계정을 삭제한 뒤 다시 가입해야 해요.
+- 저장소에 60일 동안 변화가 없으면 GitHub가 예약 실행을 멈춰요. Actions 탭에서 다시 켜 주세요.
+- 주말, 방학처럼 학교가 급식 정보를 올리지 않은 날에는 급식이 표시되지 않아요.
