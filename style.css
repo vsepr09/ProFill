@@ -320,7 +320,7 @@ legend { font-weight: 700; font-size: .95rem; margin-bottom: 6px; padding: 0; }
 .foods .food { border-bottom-color: var(--line); }
 .foods input[type="search"] { background: var(--surface); }
 .foods .add-form { background: var(--surface); }
-.foods .link[data-act="restore-defaults"] { margin-top: 6px; }
+
 
 /* 설정: 운동 시간 여러 개 */
 .wo-row { display: grid; grid-template-columns: 26px 1fr 1fr 30px; align-items: end; gap: 10px; }
@@ -360,3 +360,4 @@ legend { font-weight: 700; font-size: .95rem; margin-bottom: 6px; padding: 0; }
 /* 직접 입력 목표 */
 .cf-row { display: flex; align-items: center; gap: 6px; font-family: var(--num); font-size: 1.2rem; font-weight: 600; color: var(--accent); }
 .cf-row input { width: 76px; padding: 4px 8px; font-family: var(--num); font-size: 1.1rem; font-weight: 600; color: var(--ink); text-align: center; }
+.foods-foot { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px 16px; margin-top: 8px; }

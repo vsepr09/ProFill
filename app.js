@@ -394,7 +394,10 @@ function foodsHTML() {
     </div>
     <ul class="food-rows" id="foodRows">${foodRowsHTML()}</ul>
     <p class="hint">기본 식품의 단백질 양은 대략적인 값이에요. 먹는 제품의 포장지 값과 다르면 직접 추가해 주세요.</p>
-    ${hidden ? `<button class="link" data-act="restore-defaults">지운 기본 식품 되살리기 (${hidden}개)</button>` : ""}`;
+    <div class="foods-foot">
+      ${hidden < DEFAULT_FOODS.length ? `<button class="link danger" data-act="hide-all-defaults">기본 식품 모두 지우기</button>` : ""}
+      ${hidden ? `<button class="link" data-act="restore-defaults">지운 기본 식품 되살리기 (${hidden}개)</button>` : ""}
+    </div>`;
 }
 
 function foodRowsHTML() {
@@ -416,7 +419,7 @@ function foodRowsHTML() {
     return `<li class="food">
       <div class="food-main"><span class="food-name">${esc(f.name)}</span>${tag}${kind}<span class="food-meta">${esc(f.serving)}</span></div>
       ${f.source === "custom" ? `<span class="food-edit"><button class="link" data-act="edit-food" data-id="${f.id}">수정</button><button class="link danger" data-act="del-food" data-id="${f.id}">삭제</button></span>`
-        : f.source === "default" ? `<span class="food-edit"><button class="link danger" data-act="hide-default" data-id="${f.id}">삭제</button></span>` : ""}
+        : f.source === "default" ? `<span class="food-edit"><button class="link danger" data-act="hide-default" data-id="${f.id}">삭제</button></span>` : `<span class="food-edit"></span>`}
       <span class="food-g">${fmtG(f.protein)}g</span>
       ${btn}
     </li>`;
@@ -724,6 +727,17 @@ $app.addEventListener("click", async (e) => {
       S.lastItems = S.lastItems.filter((x) => x.foodId !== f.id);
       S.routines.forEach((r) => { r.items = r.items.filter((x) => x.foodId !== f.id); });
       return commit(`${eul(f.name)} 지웠어요`, true);
+    }
+    case "hide-all-defaults": {
+      snapshot();
+      const ids = DEFAULT_FOODS.map((f) => f.id);
+      S.hiddenDefaults = ids;
+      const keep = (x) => !ids.includes(x.foodId);
+      S.today.items = S.today.items.filter(keep);
+      S.lastItems = S.lastItems.filter(keep);
+      S.routines.forEach((r) => { r.items = r.items.filter(keep); });
+      if (ui.filter === "default") ui.filter = "all";
+      return commit("기본 식품을 모두 지웠어요", true);
     }
     case "restore-defaults": S.hiddenDefaults = []; return commit("기본 식품을 되살렸어요");
     case "del-food": {
