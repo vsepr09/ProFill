@@ -509,3 +509,30 @@ legend { font-weight: 700; font-size: .95rem; margin-bottom: 6px; padding: 0; }
 .fd-profile span { font-size: .8rem; color: var(--muted); font-weight: 600; }
 .fd-profile b { font-size: 1.1rem; }
 .fd-profile small { font-size: .78rem; color: var(--accent); font-weight: 600; }
+
+/* ---------- v5: 급식 칸 한눈에, 친구는 bar 아래 한 줄 ---------- */
+.side { max-height: none; overflow: visible; }
+.meal { padding: 10px 0; }
+.meal .dishes { font-size: .88rem; line-height: 1.5; margin: 4px 0 8px; color: var(--ink); }
+.meal.none { padding: 8px 0; }
+.meal-panel .btn.wide { margin-top: 4px; }
+
+.friend-strip { display: flex; align-items: center; gap: 10px 14px; flex-wrap: wrap; margin-top: 4px; padding: 10px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+.fs-label { font-weight: 700; font-size: .9rem; flex: none; }
+.fs-text { color: var(--muted); font-size: .86rem; }
+.fs-chips { display: flex; gap: 8px; flex-wrap: wrap; flex: 1; min-width: 0; align-items: center; }
+.fs-chip { display: inline-flex; align-items: center; gap: 7px; border: 1px solid var(--line); background: var(--bg); border-radius: 999px; padding: 5px 12px 5px 6px; font-size: .86rem; }
+.fs-chip:hover { border-color: var(--accent); }
+.fs-chip.me { border-color: var(--accent); background: var(--accent-soft); }
+.fs-rank { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: var(--surface-2); font-family: var(--num); font-weight: 700; font-size: .85rem; }
+.fs-chip:nth-child(1) .fs-rank { background: var(--accent); color: var(--accent-ink); }
+.fs-name { font-weight: 600; max-width: 7em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fs-mini { width: 36px; height: 5px; border-radius: 3px; background: var(--surface-2); overflow: hidden; }
+.fs-mini i { display: block; height: 100%; background: var(--accent); }
+.fs-pct { font-family: var(--num); font-weight: 600; font-size: .98rem; }
+.fs-all { margin-left: auto; flex: none; }
+.friend-strip .btn { margin-left: auto; }
+@media (max-width: 600px) {
+  .fs-mini { display: none; }
+  .fs-all { margin-left: 0; }
+}

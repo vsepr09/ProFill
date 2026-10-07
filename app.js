@@ -186,7 +186,11 @@ async function loadFriends() {
 }
 function updateFriends() {
   const el = document.getElementById("friends");
-  if (el) el.innerHTML = friendsHTML();
+  if (el) el.innerHTML = friendStripHTML();
+  if (ui.modal?.type === "friends") {
+    const box = document.querySelector(".modal");
+    if (box) box.innerHTML = friendsModalHTML();
+  }
 }
 
 /* ---------- 식품 ---------- */
@@ -352,7 +356,6 @@ function render() {
         </div>
         <aside class="side">
           <section class="panel meal-panel ${ui.panel === "meal" ? "open" : ""}" aria-label="급식">${mealsHTML()}</section>
-          <section class="panel friends-panel ${ui.panel === "friends" ? "open" : ""}" aria-label="친구" id="friends">${friendsHTML()}</section>
         </aside>
       </div>
     </main>
@@ -379,7 +382,6 @@ function headerHTML() {
     <div class="top-date">${esc(S.nickname)}님, ${d.getUTCMonth() + 1}월 ${d.getUTCDate()}일 ${WD[d.getUTCDay()]}요일</div>
     <nav class="top-actions">
       <button class="btn ghost panel-toggle" data-act="panel" data-p="meal">급식</button>
-      <button class="btn ghost panel-toggle" data-act="panel" data-p="friends">친구</button>
       <button class="btn ghost" data-act="open-history">기록</button>
       <button class="icon-btn" data-act="theme" aria-label="${S.theme === "dark" ? "라이트 모드로" : "다크 모드로"}" title="${S.theme === "dark" ? "라이트 모드" : "다크 모드"}">${S.theme === "dark" ? ICON_SUN : ICON_MOON}</button>
       <button class="btn ghost" data-act="open-settings">설정</button>
@@ -421,7 +423,8 @@ function heroHTML() {
       </div>
       ${t ? `<div class="goal-line" style="left:${pct(t)}%"><span>목표 ${t}g</span></div>` : ""}
       <div class="ruler" style="--tick:${(10 / max) * 100}%">${labels}</div>
-    </div>`;
+    </div>
+    <div class="friend-strip" id="friends">${friendStripHTML()}</div>`;
 }
 
 function weekHTML() {
@@ -577,7 +580,7 @@ function mealsHTML() {
     const inList = day === 0 && S.today.items.find((i) => i.foodId === `meal:${c}`);
     return `<div class="meal">
       <div class="meal-head"><h3>${MEAL_NAMES[c]}</h3><span class="meal-g">${m.protein != null ? `단백질 ${fmtG(m.protein)}g` : "단백질 정보 없음"}</span></div>
-      <ul>${(m.dishes || []).map((x) => `<li>${esc(x)}</li>`).join("")}</ul>
+      <p class="dishes">${(m.dishes || []).map(esc).join(", ")}</p>
       ${day === 0 && m.protein != null ? `<button class="btn small ${inList ? "in" : ""}" data-act="add-food" data-id="meal:${c}" data-n="1" ${inList ? "disabled" : ""}>${inList ? "체크리스트에 있어요" : "체크리스트에 담기"}</button>` : ""}
     </div>`;
   }).join("");
@@ -593,14 +596,41 @@ function mealsHTML() {
 `;
 }
 
-function friendsHTML() {
-  const head = `<div class="sec-head"><h2>오늘 친구들</h2><div class="head-actions">${S.shareProgress ? `<button class="link" data-act="refresh-friends">새로고침</button>` : ""}<button class="icon-btn side-close" data-act="close-panel" aria-label="닫기">×</button></div></div>`;
+const rankedFriends = () => friends.filter((f) => f.date === dateKey())
+  .sort((a, b) => b.pct - a.pct || (b.streak || 0) - (a.streak || 0));
+
+// bar 아래 가로 한 줄
+function friendStripHTML() {
   if (!S.shareProgress) {
-    return `${head}<p class="small muted">내 달성률을 공개하면, 공개한 친구들의 오늘 달성률과 연속 기록을 같이 볼 수 있어요.</p>
-      <button class="btn primary small" data-act="share-on">공개하고 같이 보기</button>`;
+    return `<span class="fs-label">오늘 친구들</span>
+      <span class="fs-text">달성률을 공개하면 친구들과 오늘 기록을 같이 볼 수 있어요.</span>
+      <button class="btn small" data-act="share-on">공개하고 같이 보기</button>`;
   }
-  if (friendsState === "error") return `${head}<p class="small muted">친구 목록을 불러오지 못했어요. Firestore 규칙을 새로 게시했는지 확인해 주세요.</p>`;
-  const list = friends.filter((f) => f.date === dateKey()).sort((a, b) => b.pct - a.pct || (b.streak || 0) - (a.streak || 0));
+  if (friendsState === "error") {
+    return `<span class="fs-label">오늘 친구들</span><span class="fs-text">친구 목록을 불러오지 못했어요.</span>
+      <button class="link" data-act="refresh-friends">다시 시도</button>`;
+  }
+  const list = rankedFriends();
+  const myIdx = list.findIndex((f) => f.id === uid);
+  const show = list.slice(0, 3).map((f, i) => [f, i]);
+  if (myIdx >= 3) show.push([list[myIdx], myIdx]);
+  const chips = show.map(([f, i]) => `
+    <button class="fs-chip ${f.id === uid ? "me" : ""}" data-act="friend-detail" data-id="${esc(f.id)}" aria-label="${esc(f.nickname)} ${f.pct}% 자세히 보기">
+      <span class="fs-rank">${i + 1}</span><span class="fs-name">${f.id === uid ? "나" : esc(f.nickname)}</span>
+      <span class="fs-mini"><i style="width:${Math.min(100, f.pct)}%"></i></span><span class="fs-pct">${f.pct}%</span>
+    </button>`).join("");
+  const others = list.length - (myIdx >= 0 ? 1 : 0);
+  return `<span class="fs-label">오늘 친구들</span>
+    <div class="fs-chips">${chips}${others ? "" : `<span class="fs-text">아직 공개한 친구가 없어요.</span>`}</div>
+    <button class="link fs-all" data-act="open-friends">전체 보기${list.length > 1 ? ` (${list.length}명)` : ""}</button>`;
+}
+
+// 전체 순위 창
+function friendsModalHTML() {
+  const head = `<div class="fd-head"><h2>오늘 친구들</h2><button class="link" data-act="refresh-friends">새로고침</button></div>`;
+  const close = `<div class="modal-actions"><button class="btn primary" data-act="close-modal">닫기</button></div>`;
+  if (friendsState === "error") return `${head}<p class="muted">친구 목록을 불러오지 못했어요. 인터넷 연결이나 Firestore 규칙을 확인해 주세요.</p>${close}`;
+  const list = rankedFriends();
   const rows = list.map((f, i) => `
     <li class="${f.id === uid ? "me" : ""}">
       <span class="rank">${i + 1}</span>
@@ -610,13 +640,13 @@ function friendsHTML() {
       <span class="fstreak">${f.streak ? `${FLAME}${f.streak}일 연속` : ""}</span>
       <button class="link fmore" data-act="friend-detail" data-id="${esc(f.id)}">자세히 보기</button>
     </li>`).join("");
-  return `${head}${list.length ? `<ol class="friend-list">${rows}</ol>` : `<p class="small muted">아직 오늘 기록을 올린 친구가 없어요.</p>`}
-    <p class="hint">공개 범위는 설정에서 바꿀 수 있어요.</p>`;
+  return `${head}${list.length ? `<ol class="friend-list">${rows}</ol>` : `<p class="muted">아직 오늘 기록을 올린 친구가 없어요.</p>`}
+    <p class="hint">공개 범위는 설정에서 바꿀 수 있어요.</p>${close}`;
 }
 
 function friendHTML() {
   const f = friends.find((x) => x.id === ui.modal.id);
-  const close = `<div class="modal-actions"><button class="btn primary" data-act="close-modal">닫기</button></div>`;
+  const close = `<div class="modal-actions">${ui.modal.back ? `<button class="btn ghost" data-act="back-modal">목록으로</button>` : ""}<button class="btn primary" data-act="close-modal">닫기</button></div>`;
   if (!f) return `<h2>친구</h2><p class="muted">정보를 찾을 수 없어요.</p>${close}`;
   const me = f.id === uid;
   const top = `<div class="fd-head"><h2>${esc(f.nickname)}${me ? " (나)" : ""}</h2><span class="fd-streak ${f.streak ? "on" : "off"}">${FLAME}<b>${f.streak || 0}</b>일 연속</span></div>`;
@@ -701,7 +731,7 @@ function historyHTML() {
 
 function modalHTML() {
   const m = ui.modal;
-  const inner = m.type === "settings" ? settingsHTML(m.first) : m.type === "routines" ? routinesHTML() : m.type === "history" ? historyHTML() : m.type === "friend" ? friendHTML() : infoHTML();
+  const inner = m.type === "settings" ? settingsHTML(m.first) : m.type === "routines" ? routinesHTML() : m.type === "history" ? historyHTML() : m.type === "friend" ? friendHTML() : m.type === "friends" ? friendsModalHTML() : infoHTML();
   return `<div class="modal-back" data-act="${m.first ? "" : "backdrop"}"><div class="modal" role="dialog" aria-modal="true">${inner}</div></div>`;
 }
 
@@ -948,7 +978,9 @@ $app.addEventListener("click", async (e) => {
     }
     case "meal-day": ui.mealDay = Number(b.dataset.d); return render();
     case "share-on": S.shareProgress = true; commit("이제 친구들과 달성률을 같이 봐요"); setTimeout(loadFriends, 800); return;
-    case "friend-detail": ui.panel = null; ui.modal = { type: "friend", id: b.dataset.id }; return render();
+    case "friend-detail": ui.modal = { type: "friend", id: b.dataset.id, back: ui.modal?.type === "friends" ? ui.modal : null }; return render();
+    case "open-friends": ui.modal = { type: "friends" }; loadFriends(); return render();
+    case "back-modal": ui.modal = ui.modal.back; return render();
     case "refresh-friends": friendsState = "idle"; return loadFriends();
     case "open-history": ui.modal = { type: "history", ym: S.today.date.slice(0, 6), sel: S.today.date }; return render();
     case "cal-sel": ui.modal.sel = b.dataset.k; return render();
