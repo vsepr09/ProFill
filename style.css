@@ -536,3 +536,39 @@ legend { font-weight: 700; font-size: .95rem; margin-bottom: 6px; padding: 0; }
   .fs-mini { display: none; }
   .fs-all { margin-left: 0; }
 }
+
+/* ---------- v6: 저녁 마감, 어제 마무리 ---------- */
+.night { border: 1.5px solid var(--accent); background: var(--accent-soft); border-radius: 12px; padding: 14px 16px; margin-bottom: 16px; display: grid; gap: 10px; }
+.night.done { border-style: dashed; }
+.night.done p { font-size: .9rem; }
+.night-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.night-head h3 { font-size: 1.05rem; color: var(--accent); }
+.night-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.night-list li { display: grid; grid-template-columns: 50px auto 1fr auto; gap: 10px; align-items: baseline; font-size: .92rem; }
+.night-list .t { font-family: var(--num); font-weight: 600; font-size: 1.05rem; }
+.night-list .nl { font-weight: 700; }
+.night-list .ng { font-family: var(--num); font-weight: 600; }
+.night-act { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+
+.yday { background: var(--surface); border: 2px dashed var(--accent); border-radius: 16px; padding: 18px 20px 14px; }
+.yd-sum { font-size: .9rem; white-space: nowrap; }
+.yd-sum b { font-family: var(--num); font-size: 1.5rem; }
+.yd-sum span { margin-left: 4px; font-weight: 700; color: var(--muted); }
+.yd-sum span.ok { color: var(--ok); }
+.yday .ck { grid-template-columns: minmax(120px, 1fr) auto 78px; }
+.yday .ck:last-child { border-bottom: 0; }
+.yd-actions { display: flex; justify-content: flex-end; margin-top: 10px; }
+.row-cut { display: flex; align-items: center; gap: 12px; }
+.row-cut input { max-width: 180px; }
+@media (max-width: 600px) {
+  .night-list li { grid-template-columns: 44px 1fr auto; }
+  .night-list .nf { grid-column: 2 / -1; grid-row: 2; }
+  .yday { padding: 16px 14px 12px; }
+  .yday .ck { grid-template-columns: minmax(0, 1fr) 70px; grid-template-areas: "main g" "dots dots"; }
+}
+
+/* ---------- v7 ---------- */
+.friend-strip { margin-top: 22px; padding: 14px 20px; border-radius: 14px; }
+.friend-strip .fs-label { font-size: 1.15rem; font-weight: 700; margin: 0; }
+.meal ul.dishes { list-style: none; padding: 0; margin: 4px 0 8px; font-size: .88rem; line-height: 1.55; }
+.meal ul.dishes li { padding: 0; }
