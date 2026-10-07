@@ -6,7 +6,7 @@ import {
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import {
   initializeFirestore, persistentLocalCache, persistentMultipleTabManager, doc, getDoc, setDoc, deleteDoc,
-  collection, getDocs, query, where, onSnapshot, getDocFromCache, getDocsFromCache,
+  collection, getDocs, query, where, onSnapshot, getDocFromCache,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 import { firebaseConfig } from "./firebase-config.js";
 import { GOALS, KINDS, DEFAULT_FOODS } from "./data.js";
@@ -48,8 +48,6 @@ let pendingNick = "";
 let meals = { days: {} };
 let mealsLoaded = false;
 let lastFillPct = 0;
-let sharedFoods = [];      // 친구들과 공유한 식품 (sharedFoods 컬렉션)
-let sharedState = "idle";  // idle | ok | error
 let friends = [];          // 오늘 달성률을 공개한 친구들 (public 컬렉션)
 let friendsState = "idle";
 const ui = {
@@ -96,6 +94,12 @@ function migrate(d) {
   if (!Array.isArray(d.workouts)) out.workouts = d.workout ? [{ id: newId(), ...d.workout }] : [];
   delete out.workout;
   if (!Array.isArray(out.hiddenDefaults)) out.hiddenDefaults = [];
+  // 공유 기능을 없애면서, 공유 식품(s:로 시작)을 담아 둔 것도 정리
+  const noShared = (x) => !String(x.foodId).startsWith("s:");
+  out.today.items = out.today.items.filter(noShared);
+  out.lastItems = (out.lastItems || []).filter(noShared);
+  (out.routines || []).forEach((r) => { r.items = (r.items || []).filter(noShared); });
+  if (out.recent) for (const k of Object.keys(out.recent)) if (k.startsWith("s:")) delete out.recent[k];
   // 처음 기본값(18:30)을 쓰던 사람은 저녁 급식 시간(18:20)에 맞춰 한 번만 바꿈
   if (d.cutoff === undefined || (d.cutoff === "18:30" && !d.cutoffV)) out.cutoff = "18:20";
   out.cutoffV = 2;
@@ -135,7 +139,7 @@ function recordToday() {
   }
   const e = totals().eaten;
   const prev = S.history[S.today.date];
-  // 급식이나 공유 식품 정보를 못 불러와 계산이 빠진 경우, 이미 저장된 더 큰 기록을 덮어쓰지 않음
+  // 급식 정보를 못 불러와 계산이 빠진 경우, 이미 저장된 더 큰 기록을 덮어쓰지 않음
   if (unresolved && prev && prev.e > e) return;
   S.history[S.today.date] = { e, t: target(), f };
   noteRecent();
@@ -268,27 +272,7 @@ function cleanPublic(id, d) {
   }
   return out;
 }
-function cleanShared(id, d) {
-  if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) return null;
-  const protein = r1(num(d.protein, 0, 200));
-  const name = str(d.name, 30).trim();
-  if (!name || !protein) return null;
-  return {
-    id: `s:${id}`, docId: id, name, protein, serving: str(d.serving, 20) || "1개",
-    kind: KINDS[d.kind] ? d.kind : "normal", by: str(d.by, 64), byName: str(d.byName, 20), createdAt: num(d.createdAt, 0, 1e15),
-  };
-}
-const sharedFrom = (snap) => snap.docs.map((x) => cleanShared(x.id, x.data())).filter(Boolean)
-  .sort((a, b) => b.createdAt - a.createdAt);
 const friendsFrom = (snap) => snap.docs.map((x) => cleanPublic(x.id, x.data())).filter((f) => f.id !== uid);
-async function fetchShared() {
-  try {
-    const col = collection(db, "sharedFoods");
-    const snap = navigator.onLine === false ? await getDocsFromCache(col).catch(() => getDocs(col)) : await getDocs(col);
-    sharedFoods = sharedFrom(snap);
-    sharedState = "ok";
-  } catch (e) { console.warn("shared", e); sharedState = "error"; }
-}
 async function loadFriends() {
   if (!S?.shareProgress) { friends = []; friendsState = "idle"; updateFriends(); return; }
   try {
@@ -307,7 +291,7 @@ function updateFriends() {
   if (box && ui.modal?.type === "friend") box.innerHTML = friendHTML();
 }
 
-/* ---------- 실시간 반영: 친구 순위, 공유 식품 ---------- */
+/* ---------- 실시간 반영: 친구 순위 ---------- */
 let unsubFriends = null, friendsDay = null;
 // 공개를 켠 친구들이 체크할 때마다 바로 순위에 반영
 function watchFriends() {
@@ -324,23 +308,8 @@ function watchFriends() {
     updateFriends();
   }, (e) => { console.warn("friends", e); friendsState = "error"; updateFriends(); });
 }
-let unsubShared = null;
-// 친구가 식품을 공유하거나 지우면 바로 목록에 반영
-function watchShared() {
-  if (unsubShared) return;
-  unsubShared = onSnapshot(collection(db, "sharedFoods"), (snap) => {
-    sharedFoods = sharedFrom(snap);
-    sharedState = "ok";
-    if (!S) return;
-    if (S.today.items.some((i) => i.foodId.startsWith("s:"))) { softRender(); return; }
-    const rows = document.getElementById("foodRows");
-    if (rows && !isTyping()) rows.innerHTML = foodRowsHTML();
-    else if (rows) renderPending = true;
-  }, (e) => { console.warn("shared", e); sharedState = "error"; });
-}
 function stopWatching() {
   if (unsubFriends) { unsubFriends(); unsubFriends = null; }
-  if (unsubShared) { unsubShared(); unsubShared = null; }
   friendsDay = null;
 }
 
@@ -354,7 +323,6 @@ function allFoods() {
   return [
     ...["1", "2", "3"].map(mealFood).filter(Boolean),
     ...S.customFoods.map((f) => ({ ...f, source: "custom" })),
-    ...sharedFoods.map((f) => ({ ...f, source: "shared" })),
     ...DEFAULT_FOODS.filter((f) => !S.hiddenDefaults.includes(f.id)).map((f) => ({ ...f, source: "default" })),
   ];
 }
@@ -362,7 +330,6 @@ function getFood(id) {
   if (id.startsWith("meal:")) return mealFood(id.slice(5));
   const c = S.customFoods.find((f) => f.id === id);
   if (c) return { ...c, source: "custom" };
-  if (id.startsWith("s:")) { const sh = sharedFoods.find((f) => f.id === id); return sh ? { ...sh, source: "shared" } : null; }
   const d = DEFAULT_FOODS.find((f) => f.id === id);
   return d ? { ...d, source: "default" } : null;
 }
@@ -488,13 +455,20 @@ const ICON_MOON = `<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="
 const FLAME = `<svg class="flame" viewBox="0 0 24 28" aria-hidden="true"><path class="fl-out" d="M12.4 1.2c.9 3.8 4.9 6.6 6.3 10.3 1.8 4.6-.4 10.1-4.6 11.9a8.1 8.1 0 0 1-9.8-3.2c-2-3.2-1.6-7.6.9-10.4.5 1.5 1.4 2.7 2.6 3.4-.6-4.6 1.4-9 4.6-12Z"/><path class="fl-in" d="M12.1 13.4c1.5 1.8 3.6 3.2 3.3 6a3.6 3.6 0 0 1-7.1.5c-.3-1.6.3-3.1 1.4-4.1.2.8.6 1.4 1.2 1.8-.1-1.6.3-3 1.2-4.2Z"/></svg>`;
 const ICON_SUN = `<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><circle cx="12" cy="12" r="4.5" fill="currentColor"/><g stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M4.9 19.1l1.8-1.8M17.3 6.7l1.8-1.8"/></g></svg>`;
 
+function loadingHTML() {
+  return `<main class="loading" aria-busy="true" aria-label="불러오는 중">
+    <div class="ld-word">Pro<b>Fill</b></div>
+    <div class="ld-stage" aria-hidden="true">${FLAME.replace('class="flame"', 'class="ld-flame"')}<div class="ld-bar"><i></i></div><span class="ld-goal"></span></div>
+    <p class="ld-sub">오늘의 단백질을 채우는 중<span>.</span><span>.</span><span>.</span></p>
+  </main>`;
+}
 function render() {
   if (!uid) return renderAuth();
   if (loadError) {
     $app.innerHTML = `<main class="center"><p>기록을 불러오지 못했어요. 인터넷 연결을 확인한 뒤 다시 시도해 주세요.</p><button class="btn primary" data-act="reload">다시 시도</button></main>`;
     return;
   }
-  if (!S) { $app.innerHTML = `<main class="center"><p class="muted">불러오는 중</p></main>`; return; }
+  if (!S) { $app.innerHTML = loadingHTML(); return; }
   $app.innerHTML = `
     ${headerHTML()}
     <main class="wrap">
@@ -764,7 +738,7 @@ function checklistHTML() {
     const f = getFood(it.foodId);
     if (!f) {
       const nm = it.foodId.startsWith("meal:") ? `급식 ${MEAL_NAMES[it.foodId.slice(5)] || ""}` : "식품";
-      return `<li class="ck missing"><div class="ck-main"><span class="ck-name">${esc(nm)}</span><span class="ck-meta">${!mealsLoaded || sharedState === "idle" ? "불러오는 중" : "정보를 찾을 수 없어요"}</span></div>
+      return `<li class="ck missing"><div class="ck-main"><span class="ck-name">${esc(nm)}</span><span class="ck-meta">${!mealsLoaded ? "불러오는 중" : "정보를 찾을 수 없어요"}</span></div>
         <span></span><span></span><span></span><button class="x" data-act="remove" data-i="${i}" aria-label="빼기">×</button></li>`;
     }
     const dots = Array.from({ length: it.qty }, (_, k) =>
@@ -791,7 +765,7 @@ function checklistHTML() {
 }
 
 function foodsHTML() {
-  const tabs = [["all", "전체"], ["meal", "급식"], ["custom", "내가 추가"], ["shared", "공유"], ["default", "기본"]];
+  const tabs = [["all", "전체"], ["meal", "급식"], ["custom", "내가 추가"], ["default", "기본"]];
   const hidden = S.hiddenDefaults.length;
   return `<div class="sec-head"><div><h2>단백질 식품 목록</h2><p class="sec-sub">여기서 골라 ‘오늘 먹을 것’에 담아요</p></div><button class="btn ${ui.addOpen ? "ghost" : "primary"}" data-act="toggle-add">${ui.addOpen ? "닫기" : "직접 추가"}</button></div>
     ${ui.addOpen ? addFormHTML() : ""}
@@ -818,22 +792,20 @@ function foodRowsHTML() {
     const msg = q ? "찾는 식품이 없어요. ‘직접 추가’로 등록해 보세요."
       : ui.filter === "custom" ? "직접 추가한 식품이 없어요. 자주 먹는 보충제나 간식을 ‘직접 추가’로 등록해 보세요."
       : ui.filter === "meal" ? "오늘 급식 정보가 없어요."
-      : ui.filter === "shared" ? (sharedState === "error" ? "공유 목록을 불러오지 못했어요. Firestore 규칙을 새로 게시했는지 확인해 주세요." : "아직 공유된 식품이 없어요. ‘직접 추가’에서 ‘친구들과 공유하기’를 체크해 보세요.")
       : "목록이 비어 있어요.";
     return `<li class="empty">${msg}</li>`;
   }
   return list.map((f) => {
     const inList = S.today.items.find((i) => i.foodId === f.id);
     const often = f.source !== "meal" && recentScore(f.id) >= 2 ? `<span class="tag often">자주 먹음</span>` : "";
-    const tag = often + (f.source === "custom" ? `<span class="tag">내 식품</span>` : f.source === "shared" ? `<span class="tag shared">공유</span>` : "");
+    const tag = often + (f.source === "custom" ? `<span class="tag">내 식품</span>` : "");
     const kind = f.kind === "fast" ? `<span class="tag soft">빠른 흡수</span>` : f.kind === "slow" ? `<span class="tag soft">천천히 흡수</span>` : "";
     const btn = f.kind === "meal" && inList
       ? `<button class="btn add in" disabled>담김</button>`
       : `<button class="btn add ${inList ? "in" : ""}" data-act="add-food" data-id="${esc(f.id)}" data-n="1" aria-label="${esc(f.name)} 담기">${inList ? `담김 ${inList.qty}` : "담기"}</button>`;
     return `<li class="food">
-      <div class="food-main"><span class="food-name">${esc(f.name)}</span>${tag}${kind}<span class="food-meta">${esc(f.serving)}${f.source === "shared" ? `, ${esc(f.byName || "친구")}${f.by === uid ? " (나)" : ""}` : ""}</span></div>
+      <div class="food-main"><span class="food-name">${esc(f.name)}</span>${tag}${kind}<span class="food-meta">${esc(f.serving)}</span></div>
       ${f.source === "custom" ? `<span class="food-edit"><button class="link" data-act="edit-food" data-id="${esc(f.id)}">수정</button><button class="link danger" data-act="del-food" data-id="${esc(f.id)}">삭제</button></span>`
-        : f.source === "shared" && f.by === uid ? `<span class="food-edit"><button class="link danger" data-act="del-shared" data-id="${esc(f.id)}">삭제</button></span>`
         : f.source === "default" ? `<span class="food-edit"><button class="link danger" data-act="hide-default" data-id="${esc(f.id)}">삭제</button></span>` : `<span class="food-edit"></span>`}
       <span class="food-g">${fmtG(f.protein)}g</span>
       ${btn}
@@ -848,7 +820,6 @@ function addFormHTML() {
     <label class="f-g">단백질 (g)<input id="af-protein" type="number" inputmode="decimal" min="0" max="200" step="0.1" value="${e ? e.protein : ""}" placeholder="예: 25"></label>
     <label class="f-s">1회 양<input id="af-serving" maxlength="20" value="${e ? esc(e.serving) : ""}" placeholder="예: 1스쿱"></label>
     <label class="f-k">흡수 속도<select id="af-kind">${Object.entries(KINDS).map(([k, v]) => `<option value="${k}" ${e && e.kind === k ? "selected" : ""}>${v}</option>`).join("")}</select></label>
-    ${e ? "" : `<label class="check f-share"><input type="checkbox" id="af-share"> 친구들과 공유하기 (모두의 ‘공유’ 목록에 보여요)</label>`}
     <p class="form-err" id="af-err"></p>
     <div class="form-actions">${e ? `<button class="btn ghost" data-act="cancel-edit">취소</button>` : ""}<button class="btn primary" data-act="save-food">${e ? "수정한 내용 저장" : "목록에 추가"}</button></div>
   </div>`;
@@ -1092,7 +1063,7 @@ function settingsHTML(first) {
           <input type="checkbox" role="switch" class="switch" id="s-detail" ${d.share && d.detail ? "checked" : ""} ${d.share ? "" : "disabled"}></label>
       </fieldset>
       ${first ? "" : `<fieldset class="danger-zone"><legend>계정</legend>
-        ${d.delStep ? `<p class="small">기록, 루틴, 친구 목록 공개 정보, 내가 공유한 식품이 모두 지워지고 되돌릴 수 없어요. 계속하려면 비밀번호를 입력해 주세요.</p>
+        ${d.delStep ? `<p class="small">기록, 루틴, 내가 추가한 식품, 친구 목록 공개 정보가 모두 지워지고 되돌릴 수 없어요. 계속하려면 비밀번호를 입력해 주세요.</p>
           <div class="row-inline"><input type="password" id="del-pw" autocomplete="current-password" placeholder="비밀번호" aria-label="비밀번호">
             <button class="btn danger" data-act="delete-account">영구 삭제</button><button class="btn ghost" data-act="delete-cancel">그만두기</button></div>
           <p class="form-err" id="del-err"></p>`
@@ -1365,43 +1336,9 @@ $app.addEventListener("click", async (e) => {
         ui.editingFood = null; ui.addOpen = false;
         return commit("수정한 내용을 저장했어요");
       }
-      if (document.getElementById("af-share")?.checked) {
-        if (navigator.onLine === false) { err.textContent = "공유는 인터넷이 연결됐을 때만 할 수 있어요."; return; }
-        if (b.disabled) return;
-        b.disabled = true;
-        const ref = doc(collection(db, "sharedFoods"));
-        const data = { name, protein: r1(protein), serving, kind, by: uid, byName: S.nickname, createdAt: Date.now() };
-        try { await setDoc(ref, data); }
-        catch (e2) { console.warn(e2); b.disabled = false; err.textContent = "공유하지 못했어요. Firestore 규칙을 새로 게시했는지 확인해 주세요."; return; }
-        if (!sharedFoods.some((x) => x.docId === ref.id)) sharedFoods.unshift(cleanShared(ref.id, data));
-        ui.addOpen = false; ui.filter = "shared"; ui.query = "";
-        return commit(`${eul(name)} 친구들과 공유했어요`);
-      }
       S.customFoods.unshift({ id: `c-${newId()}`, name, protein: r1(protein), serving, kind });
       ui.addOpen = false; ui.filter = "all"; ui.query = "";
       return commit(`${eul(name)} 목록에 추가했어요`);
-    }
-    case "del-shared": {
-      const f = sharedFoods.find((x) => x.id === b.dataset.id);
-      if (!f || f.by !== uid) return;
-      if (navigator.onLine === false) { toast("공유한 식품은 인터넷이 연결됐을 때만 지울 수 있어요."); return; }
-      snapshot();
-      const restoreS = undoFn;
-      const { docId } = f;
-      const data = { name: f.name, protein: f.protein, serving: f.serving, kind: f.kind, by: f.by, byName: f.byName, createdAt: f.createdAt };
-      sharedFoods = sharedFoods.filter((x) => x.id !== f.id);
-      const keep = (x) => x.foodId !== f.id;
-      S.today.items = S.today.items.filter(keep);
-      S.lastItems = S.lastItems.filter(keep);
-      S.routines.forEach((r) => { r.items = r.items.filter(keep); });
-      try { await deleteDoc(doc(db, "sharedFoods", docId)); }
-      catch (e2) { console.warn(e2); toast("지우지 못했어요. 인터넷 연결을 확인해 주세요."); sharedFoods.unshift(f); return render(); }
-      commit(`공유한 ${eul(f.name)} 지웠어요`, true);
-      undoFn = async () => {
-        try { await setDoc(doc(db, "sharedFoods", docId), data); if (!sharedFoods.some((x) => x.id === f.id)) sharedFoods.unshift(f); } catch (e3) { console.warn(e3); }
-        restoreS();
-      };
-      return;
     }
     case "hide-default": {
       const f = DEFAULT_FOODS.find((x) => x.id === b.dataset.id);
@@ -1498,8 +1435,6 @@ $app.addEventListener("click", async (e) => {
       if (unsubUser) { unsubUser(); unsubUser = null; }
       stopWatching();
       try {
-        const mine = await getDocs(query(collection(db, "sharedFoods"), where("by", "==", who)));
-        await Promise.all(mine.docs.map((x) => deleteDoc(x.ref)));
         await deleteDoc(doc(db, "public", who));
         await deleteDoc(doc(db, "users", who));
         await deleteUser(user);
@@ -1649,14 +1584,14 @@ onAuthStateChanged(auth, async (user) => {
   if (!user) {
     deleting = false;
     uid = null; S = null; ui.modal = null; ui.panel = null; lastFillPct = 0;
-    sharedFoods = []; friends = []; publicOn = null; remotePending = null;
+    friends = []; publicOn = null; remotePending = null;
     render(); return;
   }
   uid = user.uid; S = null; render();
   try {
     const ref = doc(db, "users", uid);
     const userDoc = navigator.onLine === false ? getDocFromCache(ref).catch(() => getDoc(ref)) : getDoc(ref);
-    const [snap] = await Promise.all([userDoc, mealsReady || loadMeals(), fetchShared()]);
+    const [snap] = await Promise.all([userDoc, mealsReady || loadMeals()]);
     if (uid !== user.uid) return;
     const isNew = !snap.exists();
     S = isNew ? freshData(pendingNick || user.email.split("@")[0]) : migrate(snap.data());
@@ -1665,7 +1600,6 @@ onAuthStateChanged(auth, async (user) => {
     if (!S.weight) ui.modal = { type: "settings", first: true, draft: settingsDraft() };
     render();
     watchFriends();
-    watchShared();
     unsubUser = onSnapshot(doc(db, "users", uid), (sn) => {
       if (!sn.exists() || sn.metadata.hasPendingWrites || sn.metadata.fromCache) return;
       applyRemote(sn.data());

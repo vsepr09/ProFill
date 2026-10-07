@@ -403,8 +403,6 @@ legend { font-weight: 700; font-size: .95rem; margin-bottom: 6px; padding: 0; }
 .friend-list li.me .fname { color: var(--accent); }
 
 /* 식품: 공유 */
-.tag.shared { background: var(--ok); color: var(--surface); }
-.add-form .f-share { grid-column: 1 / -1; font-weight: 600; color: var(--ink); }
 
 /* 기록 달력 */
 .cal-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
@@ -598,3 +596,26 @@ legend { font-weight: 700; font-size: .95rem; margin-bottom: 6px; padding: 0; }
 .g-btn { display: inline-block; border: 1px solid var(--line); background: var(--surface); border-radius: 7px; padding: 0 7px; font-weight: 600; font-size: .82rem; }
 .g-dot { display: inline-block; width: 14px; height: 14px; border-radius: 50%; background: var(--accent); vertical-align: -2px; }
 .guide .flame { width: 14px; height: 17px; vertical-align: -3px; }
+
+/* ---------- 로딩 화면 ---------- */
+.loading { min-height: 100vh; min-height: 100dvh; display: grid; place-content: center; justify-items: center; gap: 22px; padding: 24px; text-align: center; }
+.ld-word { font-size: 2.4rem; font-weight: 800; letter-spacing: -0.04em; line-height: 1; }
+.ld-word b { color: var(--accent); font-weight: 800; }
+.ld-stage { position: relative; width: min(280px, 72vw); padding-top: 34px; }
+.ld-bar { position: relative; height: 22px; border-radius: 8px; background: var(--surface-2); overflow: hidden; }
+.ld-bar i { position: absolute; inset: 0 auto 0 0; width: 0; border-radius: 8px; background: linear-gradient(90deg, var(--s2), var(--accent)); animation: ld-fill 2.2s cubic-bezier(.45, 0, .2, 1) infinite; }
+.ld-goal { position: absolute; left: 80%; bottom: -6px; height: 34px; width: 2px; border-radius: 1px; background: var(--ink); }
+.ld-flame { position: absolute; left: 80%; top: 0; width: 22px; height: 26px; transform: translateX(-50%) scale(0); transform-origin: 50% 100%; animation: ld-flame 2.2s ease-out infinite; }
+.ld-flame .fl-out { fill: var(--fl-out); }
+.ld-flame .fl-in { fill: var(--fl-in); }
+.ld-sub { color: var(--muted); font-size: .92rem; }
+.ld-sub span { display: inline-block; animation: ld-dot 1.2s infinite; }
+.ld-sub span:nth-child(2) { animation-delay: .2s; }
+.ld-sub span:nth-child(3) { animation-delay: .4s; }
+@keyframes ld-fill { 0% { width: 0; opacity: 1; } 55% { width: 80%; } 85% { width: 80%; opacity: 1; } 100% { width: 80%; opacity: 0; } }
+@keyframes ld-flame { 0%, 50% { transform: translateX(-50%) scale(0); } 62% { transform: translateX(-50%) scale(1.15); } 70%, 85% { transform: translateX(-50%) scale(1); } 100% { transform: translateX(-50%) scale(0); } }
+@keyframes ld-dot { 0%, 60%, 100% { opacity: .25; } 30% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .ld-bar i { width: 80%; }
+  .ld-flame { transform: translateX(-50%) scale(1); }
+}

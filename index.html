@@ -26,7 +26,15 @@
   </script>
 </head>
 <body>
-  <div id="app"><main class="center"><p class="muted">불러오는 중</p></main></div>
+  <div id="app"><main class="loading" aria-busy="true" aria-label="불러오는 중">
+    <div class="ld-word">Pro<b>Fill</b></div>
+    <div class="ld-stage" aria-hidden="true">
+      <svg class="ld-flame" viewBox="0 0 24 28"><path class="fl-out" d="M12.4 1.2c.9 3.8 4.9 6.6 6.3 10.3 1.8 4.6-.4 10.1-4.6 11.9a8.1 8.1 0 0 1-9.8-3.2c-2-3.2-1.6-7.6.9-10.4.5 1.5 1.4 2.7 2.6 3.4-.6-4.6 1.4-9 4.6-12Z"/><path class="fl-in" d="M12.1 13.4c1.5 1.8 3.6 3.2 3.3 6a3.6 3.6 0 0 1-7.1.5c-.3-1.6.3-3.1 1.4-4.1.2.8.6 1.4 1.2 1.8-.1-1.6.3-3 1.2-4.2Z"/></svg>
+      <div class="ld-bar"><i></i></div>
+      <span class="ld-goal"></span>
+    </div>
+    <p class="ld-sub">오늘의 단백질을 채우는 중<span>.</span><span>.</span><span>.</span></p>
+  </main></div>
   <noscript>이 사이트는 자바스크립트가 켜져 있어야 동작해요.</noscript>
   <script type="module" src="app.js"></script>
 </body>
