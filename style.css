@@ -577,3 +577,24 @@ legend { font-weight: 700; font-size: .95rem; margin-bottom: 6px; padding: 0; }
 .danger-zone { margin-top: 4px; }
 .danger-zone .row-inline input { flex: 1; }
 .btn.danger { background: var(--danger); border-color: var(--danger); color: #fff; }
+
+/* ---------- v8 ---------- */
+.offline-bar { position: fixed; left: 50%; top: calc(66px + env(safe-area-inset-top, 0px)); transform: translate(-50%, -12px); background: var(--warn-soft); color: var(--warn); border: 1px solid var(--warn); border-radius: 10px; padding: 8px 14px; font-size: .86rem; font-weight: 600; z-index: 30; opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s; max-width: calc(100% - 28px); text-align: center; }
+.offline-bar.show { opacity: 1; transform: translate(-50%, 0); }
+.tag.often { background: var(--accent); color: var(--accent-ink); }
+.report { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 18px 20px 14px; display: grid; gap: 12px; }
+.report .sec-head { margin-bottom: 0; }
+.cal-stats small { font-size: .76rem; color: var(--muted); }
+.rp-week { margin: 2px 0; }
+.acct-links { display: flex; gap: 18px; flex-wrap: wrap; }
+.pw-box { display: grid; gap: 8px; margin-top: 4px; }
+
+/* 사용법 안내 */
+.guide { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 12px; }
+.guide li { display: grid; grid-template-columns: 34px 1fr; gap: 12px; align-items: start; background: var(--surface-2); border-radius: 12px; padding: 12px 14px; }
+.g-n { width: 30px; height: 30px; border-radius: 50%; background: var(--accent); color: var(--accent-ink); display: grid; place-items: center; font-family: var(--num); font-weight: 700; font-size: 1.1rem; }
+.guide b { font-size: 1rem; }
+.guide p { font-size: .9rem; line-height: 1.6; margin-top: 2px; }
+.g-btn { display: inline-block; border: 1px solid var(--line); background: var(--surface); border-radius: 7px; padding: 0 7px; font-weight: 600; font-size: .82rem; }
+.g-dot { display: inline-block; width: 14px; height: 14px; border-radius: 50%; background: var(--accent); vertical-align: -2px; }
+.guide .flame { width: 14px; height: 17px; vertical-align: -3px; }

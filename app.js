@@ -2,11 +2,11 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/fireba
 import {
   getAuth, onAuthStateChanged, signInWithEmailAndPassword,
   createUserWithEmailAndPassword, signOut,
-  EmailAuthProvider, reauthenticateWithCredential, deleteUser,
+  EmailAuthProvider, reauthenticateWithCredential, deleteUser, updatePassword,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import {
   initializeFirestore, persistentLocalCache, persistentMultipleTabManager, doc, getDoc, setDoc, deleteDoc,
-  collection, getDocs, query, where, onSnapshot,
+  collection, getDocs, query, where, onSnapshot, getDocFromCache, getDocsFromCache,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 import { firebaseConfig } from "./firebase-config.js";
 import { GOALS, KINDS, DEFAULT_FOODS } from "./data.js";
@@ -19,6 +19,25 @@ const db = initializeFirestore(fbApp, {
   ignoreUndefinedProperties: true,
 });
 const EMAIL_DOMAIN = "iasa-protein.app"; // 아이디를 이메일 형식으로 바꿀 때만 쓰임 (메일은 보내지 않음)
+
+/* ---------- 인터넷 없이 열기 ---------- */
+if ("serviceWorker" in navigator) {
+  const reg = () => navigator.serviceWorker.register("./sw.js").catch((e) => console.warn("sw", e));
+  if (document.readyState === "complete") reg(); else window.addEventListener("load", reg);
+}
+function updateOnline() {
+  let bar = document.getElementById("offline");
+  if (!bar) {
+    bar = document.createElement("div");
+    bar.id = "offline"; bar.className = "offline-bar"; bar.setAttribute("role", "status");
+    bar.textContent = "인터넷 없이 쓰는 중이에요. 체크한 건 연결되면 자동으로 저장돼요.";
+    document.body.appendChild(bar);
+  }
+  bar.classList.toggle("show", navigator.onLine === false);
+}
+window.addEventListener("online", () => { updateOnline(); if (S) { loadFriends(); fetchMeals(); } });
+window.addEventListener("offline", updateOnline);
+if (document.readyState === "complete") updateOnline(); else window.addEventListener("load", updateOnline);
 
 /* ---------- 상태 ---------- */
 const $app = document.getElementById("app");
@@ -67,6 +86,7 @@ function freshData(nickname) {
     rollover: "empty", customFoods: [], routines: [], autoRoutineId: null,
     today: { date: dateKey(), items: [] }, lastItems: [], history: {},
     shareProgress: false, shareDetail: false, cutoff: "18:20", cutoffV: 2, yesterday: null,
+    recent: {}, reportSeen: null, guideSeen: false,
   };
 }
 function migrate(d) {
@@ -79,6 +99,7 @@ function migrate(d) {
   // 처음 기본값(18:30)을 쓰던 사람은 저녁 급식 시간(18:20)에 맞춰 한 번만 바꿈
   if (d.cutoff === undefined || (d.cutoff === "18:30" && !d.cutoffV)) out.cutoff = "18:20";
   out.cutoffV = 2;
+  if (d.guideSeen === undefined) out.guideSeen = true;   // 이미 쓰던 사람에게는 안내를 띄우지 않음
   for (const h of Object.values(out.history || {})) {
     if (Array.isArray(h.f)) h.f = h.f.map((x) => (Array.isArray(x) ? { n: x[0], g: x[1] } : x));
   }
@@ -86,6 +107,23 @@ function migrate(d) {
 }
 
 let saveTimer = null;
+// 최근 7일 동안 체크리스트에 담은 날짜를 식품별로 기억 (자주 먹는 식품을 위로)
+function noteRecent() {
+  if (!S.recent || typeof S.recent !== "object") S.recent = {};
+  const today = S.today.date;
+  const from = utcToKey(keyToUTC(today) - 6 * 864e5);
+  for (const it of S.today.items) {
+    if (it.foodId.startsWith("meal:")) continue;
+    const list = S.recent[it.foodId] || [];
+    if (!list.includes(today)) list.push(today);
+    S.recent[it.foodId] = list;
+  }
+  for (const [id, list] of Object.entries(S.recent)) {
+    const keep = list.filter((k) => k >= from);
+    if (keep.length) S.recent[id] = keep; else delete S.recent[id];
+  }
+}
+const recentScore = (id) => (S.recent?.[id] || []).length;
 const foodPair = (x) => (Array.isArray(x) ? x : [x.n, x.g]);
 function recordToday() {
   const f = [];
@@ -100,11 +138,12 @@ function recordToday() {
   // 급식이나 공유 식품 정보를 못 불러와 계산이 빠진 경우, 이미 저장된 더 큰 기록을 덮어쓰지 않음
   if (unresolved && prev && prev.e > e) return;
   S.history[S.today.date] = { e, t: target(), f };
+  noteRecent();
   const keys = Object.keys(S.history).sort();
   while (keys.length > 370) delete S.history[keys.shift()];
 }
-let writing = 0;
-let deleting = false;     // 계정 삭제 중에는 저장하지 않음          // 서버로 보내는 중인 저장 수 (이때 들어온 원격 변경은 무시)
+let writing = 0;          // 서버로 보내는 중인 저장 수 (이때 들어온 원격 변경은 무시)
+let deleting = false;     // 계정 삭제 중에는 저장하지 않음
 function save() {
   if (!S || !uid || deleting) return;
   recordToday();
@@ -195,14 +234,23 @@ async function fetchMeals() {
     if (r.ok) meals = await r.json();
   } catch (e) { /* 급식 파일이 없어도 나머지는 동작 */ }
   mealsLoaded = true;
-  if (S) render();
+  if (S) softRender();
+}
+let renderPending = false;
+const isTyping = () => document.activeElement && ["INPUT", "SELECT", "TEXTAREA"].includes(document.activeElement.tagName);
+// 글자를 입력 중이거나 설정 창이 열려 있으면 다시 그리기를 미룸 (입력한 내용이 지워지지 않게)
+function softRender() {
+  if (isTyping() || ui.modal?.type === "settings") { renderPending = true; return; }
+  renderPending = false;
+  render();
 }
 const todayMeals = () => (meals.days || {})[S?.today?.date || dateKey()] || {};
 const mealsOn = (k) => (meals.days || {})[k] || {};
 
 async function fetchShared() {
   try {
-    const snap = await getDocs(collection(db, "sharedFoods"));
+    const col = collection(db, "sharedFoods");
+    const snap = navigator.onLine === false ? await getDocsFromCache(col).catch(() => getDocs(col)) : await getDocs(col);
     sharedFoods = snap.docs.map((d) => ({ ...d.data(), docId: d.id, id: `s:${d.id}` }))
       .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
     sharedState = "ok";
@@ -385,6 +433,7 @@ function render() {
       <div class="layout">
         <div class="main-col">
           ${ydayActive() ? `<section class="block yday">${ydayHTML()}</section>` : ""}
+          ${reportActive() ? `<section class="block report">${reportHTML(true)}</section>` : ""}
           <section class="block plan" id="plan">${planHTML()}</section>
           <section class="block checklist">${checklistHTML()}</section>
           <section class="block foods">${foodsHTML()}</section>
@@ -515,6 +564,59 @@ function nightHTML() {
   </div>`;
 }
 
+/* ---------- 주간 리포트 ---------- */
+function weekRange(offsetWeeks = -1) {
+  const t = keyToUTC(S.today.date);
+  const wd = new Date(t).getUTCDay();             // 0 일요일
+  const monday = t - ((wd + 6) % 7) * 864e5 + offsetWeeks * 7 * 864e5;
+  return Array.from({ length: 7 }, (_, i) => utcToKey(monday + i * 864e5));
+}
+function reportData(days = weekRange(-1)) {
+  const rec = days.map((k) => ({ k, h: S.history[k] })).filter((x) => x.h && x.h.t);
+  if (!rec.length) return null;
+  const avg = rec.reduce((a, x) => a + x.h.e, 0) / rec.length;
+  const avgT = rec.reduce((a, x) => a + x.h.t, 0) / rec.length;
+  const done = rec.filter((x) => x.h.e >= x.h.t).length;
+  const weakest = rec.reduce((a, x) => (x.h.e / x.h.t < a.h.e / a.h.t ? x : a));
+  const foods = {};
+  rec.forEach((x) => (x.h.f || []).map(foodPair).forEach(([n, g]) => {
+    if (n.startsWith("급식")) n = "급식";
+    foods[n] = (foods[n] || 0) + g;
+  }));
+  const top = Object.entries(foods).sort((a, b) => b[1] - a[1]).slice(0, 3);
+  return { days, rec, avg, avgT, done, weakest, top };
+}
+function reportActive() {
+  if (new Date(keyToUTC(S.today.date)).getUTCDay() !== 1) return false;   // 월요일에만
+  const wk = weekRange(-1)[0];
+  return S.reportSeen !== wk && !!reportData();
+}
+function reportHTML(inline) {
+  const r = reportData();
+  const d0 = new Date(keyToUTC(r.days[0])), d6 = new Date(keyToUTC(r.days[6]));
+  const range = `${d0.getUTCMonth() + 1}월 ${d0.getUTCDate()}일–${d6.getUTCMonth() + 1}월 ${d6.getUTCDate()}일`;
+  const wk = new Date(keyToUTC(r.weakest.k));
+  const bars = r.days.map((k) => {
+    const h = S.history[k];
+    const p = h && h.t ? Math.round((h.e / h.t) * 100) : 0;
+    return `<span class="day ${p >= 100 ? "full" : ""}"><span class="col"><i style="height:${Math.min(100, p)}%"></i></span><b>${WD[new Date(keyToUTC(k)).getUTCDay()]}</b></span>`;
+  }).join("");
+  const body = `
+    <div class="cal-stats">
+      <div><span>하루 평균</span><b>${fmtG(r.avg)}g</b><small>목표 ${Math.round(r.avgT)}g</small></div>
+      <div><span>목표 달성</span><b>${r.done}일</b><small>기록한 ${r.rec.length}일 중</small></div>
+      <div><span>가장 부족한 날</span><b>${WD[wk.getUTCDay()]}요일</b><small>${Math.round((r.weakest.h.e / r.weakest.h.t) * 100)}%</small></div>
+    </div>
+    <div class="week fd-week rp-week">${bars}</div>
+    ${r.top.length ? `<h3>가장 많이 먹은 것</h3><ul class="cal-foods">${r.top.map(([n, g]) => `<li><span>${esc(n)}</span><span>${fmtG(g)}g</span></li>`).join("")}</ul>` : ""}`;
+  if (inline) {
+    return `<div class="sec-head"><div><h2>지난주 리포트</h2><p class="sec-sub">${range}</p></div></div>${body}
+      <div class="yd-actions"><button class="btn primary" data-act="report-seen">확인했어요</button></div>`;
+  }
+  return `<h2>지난주 리포트</h2><p class="muted">${range}</p>${body}
+    <div class="modal-actions"><button class="btn ghost" data-act="back-modal">기록으로</button><button class="btn primary" data-act="close-modal">닫기</button></div>`;
+}
+
 /* ---------- 다음 날 아침, 어제 마무리 ---------- */
 function ydayActive() {
   const y = S.yesterday;
@@ -637,8 +739,12 @@ function foodsHTML() {
 }
 
 function foodRowsHTML() {
-  const q = ui.query.trim();
-  const list = allFoods().filter((f) => ui.filter === "all" || f.source === ui.filter).filter((f) => !q || f.name.includes(q));
+  const q = ui.query.trim().toLowerCase().replace(/\s+/g, "");
+  const list = allFoods().filter((f) => ui.filter === "all" || f.source === ui.filter)
+    .filter((f) => !q || f.name.toLowerCase().replace(/\s+/g, "").includes(q))
+    .map((f, i) => ({ f, i, sc: f.source === "meal" ? 99 : recentScore(f.id) }))
+    .sort((a, b) => b.sc - a.sc || a.i - b.i)
+    .map((x) => x.f);
   if (!list.length) {
     const msg = q ? "찾는 식품이 없어요. ‘직접 추가’로 등록해 보세요."
       : ui.filter === "custom" ? "직접 추가한 식품이 없어요. 자주 먹는 보충제나 간식을 ‘직접 추가’로 등록해 보세요."
@@ -649,7 +755,8 @@ function foodRowsHTML() {
   }
   return list.map((f) => {
     const inList = S.today.items.find((i) => i.foodId === f.id);
-    const tag = f.source === "custom" ? `<span class="tag">내 식품</span>` : f.source === "shared" ? `<span class="tag shared">공유</span>` : "";
+    const often = f.source !== "meal" && recentScore(f.id) >= 2 ? `<span class="tag often">자주 먹음</span>` : "";
+    const tag = often + (f.source === "custom" ? `<span class="tag">내 식품</span>` : f.source === "shared" ? `<span class="tag shared">공유</span>` : "");
     const kind = f.kind === "fast" ? `<span class="tag soft">빠른 흡수</span>` : f.kind === "slow" ? `<span class="tag soft">천천히 흡수</span>` : "";
     const btn = f.kind === "meal" && inList
       ? `<button class="btn add in" disabled>담김</button>`
@@ -836,13 +943,14 @@ function historyHTML() {
     </div>
     <div class="cal">${cells}</div>
     <div class="cal-legend"><span><i class="l1"></i>조금</span><span><i class="l3"></i>70% 이상</span><span><i class="l4"></i>달성</span></div>
+    ${reportData() ? `<button class="btn ghost wide" data-act="open-report">지난주 리포트 보기</button>` : ""}
     <div class="cal-detail"><h3>${sd.getUTCMonth() + 1}월 ${sd.getUTCDate()}일 ${WD[sd.getUTCDay()]}요일</h3>${detail}</div>
     <div class="modal-actions"><button class="btn primary" data-act="close-modal">닫기</button></div>`;
 }
 
 function modalHTML() {
   const m = ui.modal;
-  const inner = m.type === "settings" ? settingsHTML(m.first) : m.type === "routines" ? routinesHTML() : m.type === "history" ? historyHTML() : m.type === "friend" ? friendHTML() : m.type === "friends" ? friendsModalHTML() : infoHTML();
+  const inner = m.type === "settings" ? settingsHTML(m.first) : m.type === "routines" ? routinesHTML() : m.type === "history" ? historyHTML() : m.type === "friend" ? friendHTML() : m.type === "friends" ? friendsModalHTML() : m.type === "report" ? reportHTML(false) : m.type === "guide" ? guideHTML() : infoHTML();
   return `<div class="modal-back" data-act="${m.first ? "" : "backdrop"}"><div class="modal" role="dialog" aria-modal="true">${inner}</div></div>`;
 }
 
@@ -919,11 +1027,29 @@ function settingsHTML(first) {
           <div class="row-inline"><input type="password" id="del-pw" autocomplete="current-password" placeholder="비밀번호" aria-label="비밀번호">
             <button class="btn danger" data-act="delete-account">영구 삭제</button><button class="btn ghost" data-act="delete-cancel">그만두기</button></div>
           <p class="form-err" id="del-err"></p>`
-        : `<button class="link danger left" data-act="delete-start">계정 삭제</button>`}
+        : `<div class="acct-links"><button class="link left" data-act="open-guide">사용법 다시 보기</button><button class="link left" data-act="logout">로그아웃</button>${d.pwStep ? "" : `<button class="link left" data-act="pw-start">비밀번호 바꾸기</button>`}<button class="link danger left" data-act="delete-start">계정 삭제</button></div>`}
+        ${d.pwStep && !d.delStep ? `<div class="pw-box">
+          <input type="password" id="pw-cur" autocomplete="current-password" placeholder="지금 비밀번호" aria-label="지금 비밀번호">
+          <input type="password" id="pw-new" autocomplete="new-password" placeholder="새 비밀번호 (6자 이상)" aria-label="새 비밀번호">
+          <input type="password" id="pw-new2" autocomplete="new-password" placeholder="새 비밀번호 한 번 더" aria-label="새 비밀번호 확인">
+          <div class="row-inline"><button class="btn primary" data-act="pw-change">비밀번호 바꾸기</button><button class="btn ghost" data-act="pw-cancel">그만두기</button></div>
+          <p class="form-err" id="pw-err"></p></div>` : ""}
       </fieldset>`}
     </div>
     <p class="form-err" id="s-err"></p>
     <div class="modal-actions">${first ? "" : `<button class="btn ghost" data-act="close-modal">취소</button>`}<button class="btn primary" data-act="save-settings">저장</button></div>`;
+}
+
+function guideHTML() {
+  return `<h2>ProFill 사용법</h2>
+    <p class="muted">하루 단백질, 이렇게 세 단계로 채워요.</p>
+    <ol class="guide">
+      <li><span class="g-n">1</span><div><b>오늘 먹을 것 담기</b><p>식품 목록이나 급식 칸에서 오늘 먹을 것을 <span class="g-btn">담기</span> 해요. 그러면 언제 무엇을 먹을지 ‘오늘의 추천’에 나와요.</p></div></li>
+      <li><span class="g-n">2</span><div><b>먹을 때마다 체크</b><p>‘오늘 먹을 것’에서 먹을 때마다 동그라미 <span class="g-dot"></span> 를 눌러요.</p></div></li>
+      <li><span class="g-n">3</span><div><b>bar 채우기</b><p>맨 위 bar가 채워지고, 목표를 채운 날이 이어지면 파란 불꽃 ${FLAME} 숫자가 올라가요.</p></div></li>
+    </ol>
+    <p class="note">저녁에 기기를 못 쓰면, 오후 4시부터 뜨는 ‘오늘 밤 먹을 것’에서 미리 체크하고 다음 날 아침에 고치면 돼요.</p>
+    <div class="modal-actions"><button class="btn primary" data-act="guide-done">시작하기</button></div>`;
 }
 
 function routinesHTML() {
@@ -1248,7 +1374,33 @@ $app.addEventListener("click", async (e) => {
       [...document.querySelectorAll(".wo-start")].pop()?.focus();
       return;
     }
-    case "delete-start": readSettingsForm(); ui.modal.draft.delStep = true; render(); document.getElementById("del-pw")?.focus(); return;
+    case "pw-start": readSettingsForm(); ui.modal.draft.pwStep = true; render(); document.getElementById("pw-cur")?.focus(); return;
+    case "pw-cancel": readSettingsForm(); ui.modal.draft.pwStep = false; return render();
+    case "pw-change": {
+      const cur = val("pw-cur"), nw = val("pw-new"), nw2 = val("pw-new2");
+      const err = document.getElementById("pw-err");
+      if (!cur) { err.textContent = "지금 비밀번호를 입력해 주세요."; return; }
+      if (nw.length < 6) { err.textContent = "새 비밀번호는 6자 이상이어야 해요."; return; }
+      if (nw !== nw2) { err.textContent = "새 비밀번호 두 개가 서로 달라요."; return; }
+      if (nw === cur) { err.textContent = "지금 비밀번호와 다른 비밀번호를 정해 주세요."; return; }
+      if (b.disabled) return;
+      b.disabled = true; b.textContent = "바꾸는 중";
+      const user = auth.currentUser;
+      try {
+        await reauthenticateWithCredential(user, EmailAuthProvider.credential(user.email, cur));
+        await updatePassword(user, nw);
+        readSettingsForm(); ui.modal.draft.pwStep = false; render();
+        toast("비밀번호를 바꿨어요");
+      } catch (e2) {
+        b.disabled = false; b.textContent = "비밀번호 바꾸기";
+        err.textContent = ["auth/wrong-password", "auth/invalid-credential", "auth/invalid-login-credentials"].includes(e2.code) ? "지금 비밀번호가 맞지 않아요."
+          : e2.code === "auth/weak-password" ? "새 비밀번호가 너무 쉬워요. 6자 이상으로 정해 주세요."
+          : e2.code === "auth/too-many-requests" ? "시도가 너무 많았어요. 잠시 뒤 다시 해 주세요."
+          : `바꾸지 못했어요 (${e2.code || e2.message})`;
+      }
+      return;
+    }
+    case "delete-start": readSettingsForm(); ui.modal.draft.pwStep = false; ui.modal.draft.delStep = true; render(); document.getElementById("del-pw")?.focus(); return;
     case "delete-cancel": readSettingsForm(); ui.modal.draft.delStep = false; return render();
     case "delete-account": {
       const pw = val("del-pw");
@@ -1284,11 +1436,15 @@ $app.addEventListener("click", async (e) => {
       }
       return;
     }
+    case "guide-done": S.guideSeen = true; ui.modal = null; return commit();
+    case "open-guide": ui.modal = { type: "guide" }; return render();
+    case "report-seen": S.reportSeen = weekRange(-1)[0]; return commit();
+    case "open-report": ui.modal = { type: "report", back: ui.modal }; return render();
     case "cutoff-clear": { const el = document.getElementById("s-cutoff"); if (el) el.value = ""; return; }
     case "wo-del": readSettingsForm(); ui.modal.draft.workouts = ui.modal.draft.workouts.filter((w) => w.id !== b.dataset.id); return render();
     case "back-settings": ui.modal = ui.modal.back; return render();
     case "backdrop": if (e.target === b) { ui.modal = null; render(); } return;
-    case "close-modal": ui.modal = null; render(); if (remotePending) applyRemote(remotePending); return;
+    case "close-modal": ui.modal = null; renderPending = false; render(); if (remotePending) applyRemote(remotePending); return;
 
     case "save-settings": {
       readSettingsForm();
@@ -1318,7 +1474,7 @@ $app.addEventListener("click", async (e) => {
       S.weight = r1(weight); S.goal = d.goal; S.workouts = workouts;
       S.rollover = d.rollover;
       if (S.rollover === "routine" && !S.routines.some((r) => r.id === S.autoRoutineId)) S.autoRoutineId = S.routines[0]?.id ?? null;
-      ui.modal = null;
+      ui.modal = S.guideSeen ? null : { type: "guide", first: true };
       return commit("설정을 저장했어요");
     }
     case "save-routine": {
@@ -1375,6 +1531,7 @@ $app.addEventListener("keydown", (e) => {
 function tick() {
   if (!S) return;
   if (remotePending) applyRemote(remotePending);
+  if (renderPending) softRender();
   if (ensureToday()) {
     save(); loadMeals(); render(); loadFriends();
     toast("새로운 하루예요. 체크리스트를 새로 시작했어요.");
@@ -1403,8 +1560,7 @@ let remotePending = null;
 function applyRemote(data) {
   if (!S || writing || saveTimer) { remotePending = data; return; }
   if (stable(data) === stable(S)) { remotePending = null; return; }
-  const typing = document.activeElement && ["INPUT", "SELECT", "TEXTAREA"].includes(document.activeElement.tagName);
-  if (typing || ui.modal?.type === "settings") { remotePending = data; return; }
+  if (isTyping() || ui.modal?.type === "settings") { remotePending = data; return; }
   remotePending = null;
   S = migrate(data);
   applyTheme(S.theme);
@@ -1422,7 +1578,9 @@ onAuthStateChanged(auth, async (user) => {
   }
   uid = user.uid; S = null; render();
   try {
-    const [snap] = await Promise.all([getDoc(doc(db, "users", uid)), mealsReady || loadMeals(), fetchShared()]);
+    const ref = doc(db, "users", uid);
+    const userDoc = navigator.onLine === false ? getDocFromCache(ref).catch(() => getDoc(ref)) : getDoc(ref);
+    const [snap] = await Promise.all([userDoc, mealsReady || loadMeals(), fetchShared()]);
     if (uid !== user.uid) return;
     const isNew = !snap.exists();
     S = isNew ? freshData(pendingNick || user.email.split("@")[0]) : migrate(snap.data());
