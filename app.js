@@ -43,12 +43,17 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "
 const newId = () => Math.random().toString(36).slice(2, 10);
 const WD = "일월화수목금토";
 const MEAL_NAMES = { 1: "아침", 2: "점심", 3: "저녁" };
+const eul = (w) => {
+  const c = String(w).trim().slice(-1).charCodeAt(0);
+  if (c >= 0xac00 && c <= 0xd7a3) return `${w}${(c - 0xac00) % 28 ? "을" : "를"}`;
+  return `${w}을(를)`;
+};
 const val = (id) => document.getElementById(id)?.value ?? "";
 
 /* ---------- 데이터 ---------- */
 function freshData(nickname) {
   return {
-    nickname, weight: null, goal: "bulk", workouts: [], hiddenDefaults: [],
+    nickname, weight: null, goal: "bulk", customFactor: 2, workouts: [], hiddenDefaults: [],
     theme: document.documentElement.dataset.theme || "light",
     rollover: "empty", customFoods: [], routines: [], autoRoutineId: null,
     today: { date: dateKey(), items: [] }, lastItems: [], history: {},
@@ -123,7 +128,11 @@ function getFood(id) {
   const d = DEFAULT_FOODS.find((f) => f.id === id);
   return d ? { ...d, source: "default" } : null;
 }
-const target = () => (S.weight ? Math.round(S.weight * GOALS[S.goal].factor) : 0);
+const CF_MIN = 0.8, CF_MAX = 3.5;
+const goalInfo = () => (S.goal === "custom"
+  ? { label: "직접 정한", factor: S.customFactor || 2 }
+  : GOALS[S.goal] || GOALS.bulk);
+const target = () => (S.weight ? Math.round(S.weight * goalInfo().factor) : 0);
 function totals() {
   let eaten = 0, planned = 0;
   for (const it of S.today.items) {
@@ -157,8 +166,8 @@ function buildPlan() {
   const now = nowMin();
   let slots = [
     { time: 8 * 60, label: "아침", meal: "1" },
-    { time: 12 * 60 + 30, label: "점심", meal: "2" },
-    { time: 18 * 60 + 30, label: "저녁", meal: "3" },
+    { time: 12 * 60 + 40, label: "점심", meal: "2" },
+    { time: 18 * 60 + 20, label: "저녁", meal: "3" },
     { time: 23 * 60, label: "자기 전", pref: "slow" },
   ];
   for (const w of S.workouts) {
@@ -234,8 +243,7 @@ function render() {
       </div>
     </main>
     ${ui.mealOpen ? `<div class="side-back" data-act="toggle-meal"></div>` : ""}
-    ${ui.modal ? modalHTML() : ""}
-    <div class="toast" id="toast" role="status" aria-live="polite"></div>`;
+    ${ui.modal ? modalHTML() : ""}`;
   animateFill();
 }
 
@@ -280,7 +288,7 @@ function heroHTML() {
   const step = max > 300 ? 100 : 50;
   let labels = "";
   for (let g = step; g < max; g += step) labels += `<span style="left:${pct(g)}%">${g}</span>`;
-  const goal = GOALS[S.goal];
+  const goal = goalInfo();
   return `
     <div class="hero-head">
       <div class="big"><span class="num">${fmtG(eaten)}</span><span class="of">/ ${t || "–"}g</span></div>
@@ -458,7 +466,7 @@ function modalHTML() {
 
 function settingsDraft() {
   return {
-    nick: S.nickname, weight: S.weight ?? "", goal: S.goal, rollover: S.rollover,
+    nick: S.nickname, weight: S.weight ?? "", goal: S.goal, customFactor: S.customFactor ?? 2, rollover: S.rollover,
     workouts: S.workouts.map((w) => ({ ...w })),
   };
 }
@@ -468,17 +476,27 @@ function readSettingsForm() {
   d.nick = val("s-nick");
   d.weight = val("s-weight");
   d.goal = document.querySelector('input[name="s-goal"]:checked')?.value || d.goal;
+  d.customFactor = val("s-cf");
   d.rollover = val("s-roll") || d.rollover;
   d.workouts = [...document.querySelectorAll(".wo-row")].map((r) => ({
     id: r.dataset.id, start: r.querySelector(".wo-start").value, duration: r.querySelector(".wo-dur").value,
   }));
 }
 
+function cfPreview(w, f) {
+  w = parseFloat(w); f = parseFloat(f);
+  if (!(f >= CF_MIN && f <= CF_MAX)) return `${CF_MIN}–${CF_MAX} 사이로 적어요`;
+  return w >= 25 ? `하루 ${Math.round(w * f)}g` : "원하는 숫자를 적어요";
+}
 function settingsHTML(first) {
   const d = ui.modal.draft;
   const goals = Object.entries(GOALS).map(([k, g]) => `
     <label class="goal"><input type="radio" name="s-goal" value="${k}" ${d.goal === k ? "checked" : ""}>
-      <span class="goal-name">${g.label}</span><span class="goal-f">1kg당 ${g.factor}g</span><span class="goal-d">${g.desc}</span></label>`).join("");
+      <span class="goal-name">${g.label}</span><span class="goal-f">1kg당 ${g.factor}g</span><span class="goal-d">${g.desc}</span></label>`).join("") + `
+    <label class="goal custom"><input type="radio" name="s-goal" value="custom" ${d.goal === "custom" ? "checked" : ""}>
+      <span class="goal-name">직접 입력</span>
+      <span class="cf-row">1kg당 <input id="s-cf" type="number" inputmode="decimal" min="${CF_MIN}" max="${CF_MAX}" step="0.1" value="${esc(d.customFactor)}" aria-label="체중 1kg당 단백질 g">g</span>
+      <span class="goal-d" id="s-cf-out">${cfPreview(d.weight, d.customFactor)}</span></label>`;
   const wo = d.workouts.map((w, n) => `
     <div class="wo-row" data-id="${esc(w.id)}">
       <span class="wo-n">${n + 1}</span>
@@ -537,6 +555,7 @@ function infoHTML() {
       <div class="formula"><span>하루 목표</span><strong>몸무게(kg) × 목표 숫자</strong></div>
       ${w ? `<p class="muted center-t">몸무게 ${w}kg 기준으로 계산했어요</p>` : ""}
       <ul class="goal-basis">${goals}</ul>
+      <p class="muted">‘직접 입력’을 고르면 위 근거를 참고해 1kg당 ${CF_MIN}–${CF_MAX}g 사이에서 원하는 숫자를 정할 수 있어요.</p>
       <h3>언제 먹으면 좋을까</h3>
       <ul class="tips">
         <li><strong>한 번에 20–40g</strong><span>한 끼에 몰아 먹기보다 나눠 먹어요.</span></li>
@@ -612,14 +631,27 @@ async function onAuthSubmit(e) {
 
 /* ---------- 알림 ---------- */
 let toastTimer = null;
-function toast(msg) {
-  const el = document.getElementById("toast");
-  if (!el) return;
-  el.textContent = msg;
+let undoSnap = null;
+function toast(msg, undo = false) {
+  let el = document.getElementById("toast");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "toast"; el.className = "toast";
+    el.setAttribute("role", "status"); el.setAttribute("aria-live", "polite");
+    document.body.appendChild(el);
+    el.addEventListener("click", (e) => {
+      if (!e.target.closest("[data-undo]") || !undoSnap) return;
+      S = undoSnap; undoSnap = null;
+      save(); render(); toast("되돌렸어요");
+    });
+  }
+  if (!undo) undoSnap = null;
+  el.innerHTML = `<span>${esc(msg)}</span>${undo ? `<button class="toast-undo" data-undo>되돌리기</button>` : ""}`;
   el.classList.add("show");
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => el.classList.remove("show"), 2200);
+  toastTimer = setTimeout(() => { el.classList.remove("show"); undoSnap = null; }, undo ? 5000 : 2200);
 }
+const snapshot = () => { undoSnap = JSON.parse(JSON.stringify(S)); };
 
 function applyTheme(t) {
   document.documentElement.dataset.theme = t;
@@ -627,7 +659,7 @@ function applyTheme(t) {
 }
 
 /* ---------- 이벤트 ---------- */
-function commit(msg) { save(); render(); if (msg) toast(msg); }
+function commit(msg, undo = false) { save(); render(); if (msg) toast(msg, undo); }
 
 $app.addEventListener("click", async (e) => {
   const b = e.target.closest("[data-act]");
@@ -639,7 +671,7 @@ $app.addEventListener("click", async (e) => {
   switch (act) {
     case "auth-mode": ui.authMode = b.dataset.m; ui.authError = ""; return renderAuth();
     case "reload": location.reload(); return;
-    case "logout": if (confirm("로그아웃할까요?")) { await signOut(auth); } return;
+    case "logout": await signOut(auth); return;
     case "theme": S.theme = S.theme === "dark" ? "light" : "dark"; applyTheme(S.theme); return commit();
     case "toggle-meal": ui.mealOpen = !ui.mealOpen; return render();
 
@@ -657,8 +689,8 @@ $app.addEventListener("click", async (e) => {
       return commit(t && was < t && now >= t ? "오늘 목표를 채웠어요" : "");
     }
     case "qty": { const it = items[i]; it.qty = Math.max(1, Math.min(20, it.qty + Number(b.dataset.d))); it.eaten = Math.min(it.eaten, it.qty); return commit(); }
-    case "remove": items.splice(i, 1); return commit();
-    case "clear": if (confirm("체크리스트를 모두 비울까요?")) { S.today.items = []; commit(); } return;
+    case "remove": { snapshot(); const f = getFood(items[i].foodId); items.splice(i, 1); return commit(`${eul(f ? f.name : "식품")} 뺐어요`, true); }
+    case "clear": snapshot(); S.today.items = []; return commit("체크리스트를 비웠어요", true);
     case "load-last": mergeItems(S.lastItems); return commit("지난번 목록을 담았어요");
     case "load-routine": { const r = S.routines.find((x) => x.id === b.dataset.id); if (r) { mergeItems(r.items); ui.modal = null; commit(`‘${r.name}’ 루틴을 담았어요`); } return; }
 
@@ -681,26 +713,28 @@ $app.addEventListener("click", async (e) => {
       }
       S.customFoods.unshift({ id: `c-${newId()}`, name, protein: r1(protein), serving, kind });
       ui.addOpen = false; ui.filter = "all"; ui.query = "";
-      return commit(`${name}을(를) 목록에 추가했어요`);
+      return commit(`${eul(name)} 목록에 추가했어요`);
     }
     case "hide-default": {
       const f = DEFAULT_FOODS.find((x) => x.id === b.dataset.id);
-      if (!f || !confirm(`기본 식품 ‘${f.name}’을(를) 목록에서 지울까요? 체크리스트와 루틴에서도 빠져요. 나중에 되살릴 수 있어요.`)) return;
+      if (!f) return;
+      snapshot();
       S.hiddenDefaults.push(f.id);
       S.today.items = S.today.items.filter((x) => x.foodId !== f.id);
       S.lastItems = S.lastItems.filter((x) => x.foodId !== f.id);
       S.routines.forEach((r) => { r.items = r.items.filter((x) => x.foodId !== f.id); });
-      return commit("지웠어요");
+      return commit(`${eul(f.name)} 지웠어요`, true);
     }
     case "restore-defaults": S.hiddenDefaults = []; return commit("기본 식품을 되살렸어요");
     case "del-food": {
       const f = S.customFoods.find((x) => x.id === b.dataset.id);
-      if (!f || !confirm(`‘${f.name}’을(를) 목록에서 지울까요? 체크리스트와 루틴에서도 빠져요.`)) return;
+      if (!f) return;
+      snapshot();
       S.customFoods = S.customFoods.filter((x) => x.id !== f.id);
       S.today.items = S.today.items.filter((x) => x.foodId !== f.id);
       S.lastItems = S.lastItems.filter((x) => x.foodId !== f.id);
       S.routines.forEach((r) => { r.items = r.items.filter((x) => x.foodId !== f.id); });
-      return commit("지웠어요");
+      return commit(`${eul(f.name)} 지웠어요`, true);
     }
 
     case "open-settings": ui.modal = { type: "settings", draft: settingsDraft() }; return render();
@@ -737,6 +771,11 @@ $app.addEventListener("click", async (e) => {
       }
       workouts.sort((a, b) => parseTime(a.start) - parseTime(b.start));
       S.nickname = d.nick.trim() || S.nickname;
+      if (d.goal === "custom") {
+        const cf = parseFloat(d.customFactor);
+        if (!(cf >= CF_MIN && cf <= CF_MAX)) { err.textContent = `직접 입력 숫자는 ${CF_MIN}–${CF_MAX} 사이로 적어 주세요.`; return; }
+        S.customFactor = r1(cf);
+      }
       S.weight = r1(weight); S.goal = d.goal; S.workouts = workouts;
       S.rollover = d.rollover;
       if (S.rollover === "routine" && !S.routines.some((r) => r.id === S.autoRoutineId)) S.autoRoutineId = S.routines[0]?.id ?? null;
@@ -756,15 +795,23 @@ $app.addEventListener("click", async (e) => {
     }
     case "del-routine": {
       const r = S.routines.find((x) => x.id === b.dataset.id);
-      if (!r || !confirm(`‘${r.name}’ 루틴을 지울까요?`)) return;
+      if (!r) return;
+      snapshot();
       S.routines = S.routines.filter((x) => x.id !== r.id);
       if (S.autoRoutineId === r.id) { S.autoRoutineId = null; if (S.rollover === "routine") S.rollover = "empty"; }
-      return commit("루틴을 지웠어요");
+      return commit(`‘${r.name}’ 루틴을 지웠어요`, true);
     }
   }
 });
 
+$app.addEventListener("focusin", (e) => {
+  if (e.target.id === "s-cf") document.querySelector('input[name="s-goal"][value="custom"]').checked = true;
+});
 $app.addEventListener("input", (e) => {
+  if (e.target.id === "s-cf" || e.target.id === "s-weight") {
+    const out = document.getElementById("s-cf-out");
+    if (out) out.textContent = cfPreview(val("s-weight"), val("s-cf"));
+  }
   if (e.target.id === "foodSearch") {
     ui.query = e.target.value;
     document.getElementById("foodRows").innerHTML = foodRowsHTML();
