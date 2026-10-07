@@ -35,7 +35,7 @@ function updateOnline() {
   }
   bar.classList.toggle("show", navigator.onLine === false);
 }
-window.addEventListener("online", () => { updateOnline(); if (S) { loadFriends(); fetchMeals(); } });
+window.addEventListener("online", () => { updateOnline(); if (S) fetchMeals(); });
 window.addEventListener("offline", updateOnline);
 if (document.readyState === "complete") updateOnline(); else window.addEventListener("load", updateOnline);
 
@@ -269,10 +269,47 @@ async function loadFriends() {
 function updateFriends() {
   const el = document.getElementById("friends");
   if (el) el.innerHTML = friendStripHTML();
-  if (ui.modal?.type === "friends") {
-    const box = document.querySelector(".modal");
-    if (box) box.innerHTML = friendsModalHTML();
-  }
+  const box = document.querySelector(".modal");
+  if (box && ui.modal?.type === "friends") box.innerHTML = friendsModalHTML();
+  if (box && ui.modal?.type === "friend") box.innerHTML = friendHTML();
+}
+
+/* ---------- 실시간 반영: 친구 순위, 공유 식품 ---------- */
+let unsubFriends = null, friendsDay = null;
+// 공개를 켠 친구들이 체크할 때마다 바로 순위에 반영
+function watchFriends() {
+  const day = dateKey();
+  if (unsubFriends && friendsDay === day && S?.shareProgress) return;
+  if (unsubFriends) { unsubFriends(); unsubFriends = null; }
+  friendsDay = null;
+  if (!S?.shareProgress || !uid) { friends = []; friendsState = "idle"; updateFriends(); return; }
+  friendsDay = day;
+  unsubFriends = onSnapshot(query(collection(db, "public"), where("date", "==", day)), (snap) => {
+    friends = snap.docs.map((d) => ({ id: d.id, ...d.data() })).filter((f) => f.id !== uid);
+    friends.unshift({ id: uid, ...myPublic() });
+    friendsState = "ok";
+    updateFriends();
+  }, (e) => { console.warn("friends", e); friendsState = "error"; updateFriends(); });
+}
+let unsubShared = null;
+// 친구가 식품을 공유하거나 지우면 바로 목록에 반영
+function watchShared() {
+  if (unsubShared) return;
+  unsubShared = onSnapshot(collection(db, "sharedFoods"), (snap) => {
+    sharedFoods = snap.docs.map((d) => ({ ...d.data(), docId: d.id, id: `s:${d.id}` }))
+      .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+    sharedState = "ok";
+    if (!S) return;
+    if (S.today.items.some((i) => i.foodId.startsWith("s:"))) { softRender(); return; }
+    const rows = document.getElementById("foodRows");
+    if (rows && !isTyping()) rows.innerHTML = foodRowsHTML();
+    else if (rows) renderPending = true;
+  }, (e) => { console.warn("shared", e); sharedState = "error"; });
+}
+function stopWatching() {
+  if (unsubFriends) { unsubFriends(); unsubFriends = null; }
+  if (unsubShared) { unsubShared(); unsubShared = null; }
+  friendsDay = null;
 }
 
 /* ---------- 식품 ---------- */
@@ -1248,7 +1285,7 @@ $app.addEventListener("click", async (e) => {
       return commit();
     }
     case "meal-day": ui.mealDay = Number(b.dataset.d); return render();
-    case "share-on": S.shareProgress = true; commit("이제 친구들과 달성률을 같이 봐요"); setTimeout(loadFriends, 800); return;
+    case "share-on": S.shareProgress = true; commit("이제 친구들과 달성률을 같이 봐요"); watchFriends(); return;
     case "friend-detail": ui.modal = { type: "friend", id: b.dataset.id, back: ui.modal?.type === "friends" ? ui.modal : null }; return render();
     case "open-friends": ui.modal = { type: "friends" }; loadFriends(); return render();
     case "back-modal": ui.modal = ui.modal.back; return render();
@@ -1420,6 +1457,7 @@ $app.addEventListener("click", async (e) => {
       deleting = true;
       clearTimeout(saveTimer); saveTimer = null;
       if (unsubUser) { unsubUser(); unsubUser = null; }
+      stopWatching();
       try {
         const mine = await getDocs(query(collection(db, "sharedFoods"), where("by", "==", who)));
         await Promise.all(mine.docs.map((x) => deleteDoc(x.ref)));
@@ -1470,7 +1508,7 @@ $app.addEventListener("click", async (e) => {
       S.shareProgress = d.share;
       S.cutoff = d.cutoff || null;
       S.shareDetail = d.share && d.detail;
-      if (shareChanged) setTimeout(loadFriends, 800);
+      if (shareChanged) setTimeout(watchFriends, 0);
       S.weight = r1(weight); S.goal = d.goal; S.workouts = workouts;
       S.rollover = d.rollover;
       if (S.rollover === "routine" && !S.routines.some((r) => r.id === S.autoRoutineId)) S.autoRoutineId = S.routines[0]?.id ?? null;
@@ -1533,7 +1571,7 @@ function tick() {
   if (remotePending) applyRemote(remotePending);
   if (renderPending) softRender();
   if (ensureToday()) {
-    save(); loadMeals(); render(); loadFriends();
+    save(); loadMeals(); render(); watchFriends();
     toast("새로운 하루예요. 체크리스트를 새로 시작했어요.");
     return;
   }
@@ -1541,11 +1579,10 @@ function tick() {
   if (plan && !ui.modal) plan.innerHTML = planHTML();
 }
 setInterval(tick, 30000);
-setInterval(() => { if (S && document.visibilityState === "visible") loadFriends(); }, 120000);
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "hidden") { flushSave(); return; }
   tick();
-  if (S) loadFriends();
+  if (S) watchFriends();
 });
 window.addEventListener("pagehide", () => { flushSave(); });
 
@@ -1566,10 +1603,12 @@ function applyRemote(data) {
   applyTheme(S.theme);
   if (ensureToday()) save();
   render();
+  watchFriends();
 }
 onAuthStateChanged(auth, async (user) => {
   loadError = false;
   if (unsubUser) { unsubUser(); unsubUser = null; }
+  stopWatching();
   if (!user) {
     deleting = false;
     uid = null; S = null; ui.modal = null; ui.panel = null; lastFillPct = 0;
@@ -1588,7 +1627,8 @@ onAuthStateChanged(auth, async (user) => {
     if (ensureToday() || isNew) save();
     if (!S.weight) ui.modal = { type: "settings", first: true, draft: settingsDraft() };
     render();
-    loadFriends();
+    watchFriends();
+    watchShared();
     unsubUser = onSnapshot(doc(db, "users", uid), (sn) => {
       if (!sn.exists() || sn.metadata.hasPendingWrites || sn.metadata.fromCache) return;
       applyRemote(sn.data());
