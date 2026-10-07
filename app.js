@@ -4,8 +4,8 @@ import {
   createUserWithEmailAndPassword, signOut,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import {
-  initializeFirestore, persistentLocalCache, doc, getDoc, setDoc, deleteDoc,
-  collection, getDocs, query, where,
+  initializeFirestore, persistentLocalCache, persistentMultipleTabManager, doc, getDoc, setDoc, deleteDoc,
+  collection, getDocs, query, where, onSnapshot,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 import { firebaseConfig } from "./firebase-config.js";
 import { GOALS, KINDS, DEFAULT_FOODS } from "./data.js";
@@ -13,7 +13,10 @@ import { GOALS, KINDS, DEFAULT_FOODS } from "./data.js";
 /* ---------- Firebase ---------- */
 const fbApp = initializeApp(firebaseConfig);
 const auth = getAuth(fbApp);
-const db = initializeFirestore(fbApp, { localCache: persistentLocalCache(), ignoreUndefinedProperties: true });
+const db = initializeFirestore(fbApp, {
+  localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
+  ignoreUndefinedProperties: true,
+});
 const EMAIL_DOMAIN = "iasa-protein.app"; // 아이디를 이메일 형식으로 바꿀 때만 쓰임 (메일은 보내지 않음)
 
 /* ---------- 상태 ---------- */
@@ -83,26 +86,38 @@ let saveTimer = null;
 const foodPair = (x) => (Array.isArray(x) ? x : [x.n, x.g]);
 function recordToday() {
   const f = [];
+  let unresolved = false;
   for (const it of S.today.items) {
     const food = getFood(it.foodId);
-    if (food && it.eaten) f.push({ n: food.name, g: r1(itemG(it, food) * it.eaten) });
+    if (!food) { if (it.eaten) unresolved = true; continue; }
+    if (it.eaten) f.push({ n: food.name, g: r1(itemG(it, food) * it.eaten) });
   }
-  S.history[S.today.date] = { e: totals().eaten, t: target(), f };
+  const e = totals().eaten;
+  const prev = S.history[S.today.date];
+  // 급식이나 공유 식품 정보를 못 불러와 계산이 빠진 경우, 이미 저장된 더 큰 기록을 덮어쓰지 않음
+  if (unresolved && prev && prev.e > e) return;
+  S.history[S.today.date] = { e, t: target(), f };
   const keys = Object.keys(S.history).sort();
   while (keys.length > 370) delete S.history[keys.shift()];
 }
+let writing = 0;          // 서버로 보내는 중인 저장 수 (이때 들어온 원격 변경은 무시)
 function save() {
   if (!S || !uid) return;
   recordToday();
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(async () => {
-    try { await setDoc(doc(db, "users", uid), S); }
-    catch (e) {
-      console.error(e);
-      toast(navigator.onLine === false ? "인터넷이 끊겨 있어요. 연결되면 다시 저장해요." : `저장하지 못했어요 (${e.code || e.message || "알 수 없는 오류"})`);
-    }
-    syncPublic();
-  }, 500);
+  saveTimer = setTimeout(flushSave, 500);
+}
+async function flushSave() {
+  if (!saveTimer || !S || !uid) return;
+  clearTimeout(saveTimer); saveTimer = null;
+  const who = uid, data = JSON.parse(JSON.stringify(S));
+  writing++;
+  try { await setDoc(doc(db, "users", who), data); remotePending = null; }
+  catch (e) {
+    console.error(e);
+    toast(navigator.onLine === false ? "인터넷이 끊겨 있어요. 연결되면 다시 저장해요." : `저장하지 못했어요 (${e.code || e.message || "알 수 없는 오류"})`);
+  } finally { writing--; }
+  if (uid === who) syncPublic();
 }
 // 친구 보기: 공개를 켠 사람만 닉네임, 오늘 달성률, 연속 기록을 올림
 function myPublic() {
@@ -123,15 +138,19 @@ function myPublic() {
   }
   return out;
 }
+let publicOn = null;      // 서버의 공개 문서 상태를 기억해서, 꺼진 상태면 매번 지우지 않음
 async function syncPublic() {
+  if (!S || !uid) return;
   try {
     if (S.shareProgress) {
+      publicOn = true;
       const mine = myPublic();
       await setDoc(doc(db, "public", uid), mine);
       friends = [{ id: uid, ...mine }, ...friends.filter((x) => x.id !== uid)];
       updateFriends();
-    } else {
+    } else if (publicOn !== false) {
       await deleteDoc(doc(db, "public", uid));
+      publicOn = false;
     }
   } catch (e) { console.warn("public", e); }
 }
@@ -164,7 +183,9 @@ function ensureToday() {
   return true;
 }
 
-async function loadMeals() {
+let mealsReady = null;
+function loadMeals() { mealsReady = fetchMeals(); return mealsReady; }
+async function fetchMeals() {
   try {
     const r = await fetch(`data/meals.json?t=${Date.now()}`, { cache: "no-store" });
     if (r.ok) meals = await r.json();
@@ -175,17 +196,13 @@ async function loadMeals() {
 const todayMeals = () => (meals.days || {})[S?.today?.date || dateKey()] || {};
 const mealsOn = (k) => (meals.days || {})[k] || {};
 
-async function loadShared() {
+async function fetchShared() {
   try {
     const snap = await getDocs(collection(db, "sharedFoods"));
     sharedFoods = snap.docs.map((d) => ({ ...d.data(), docId: d.id, id: `s:${d.id}` }))
       .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
     sharedState = "ok";
   } catch (e) { console.warn("shared", e); sharedState = "error"; }
-  const rows = document.getElementById("foodRows");
-  if (rows) rows.innerHTML = foodRowsHTML();
-  const cl = document.querySelector(".checklist");
-  if (cl && S.today.items.some((i) => i.foodId.startsWith("s:"))) render();
 }
 async function loadFriends() {
   if (!S?.shareProgress) { friends = []; friendsState = "idle"; updateFriends(); return; }
@@ -569,7 +586,11 @@ function checklistHTML() {
   const items = S.today.items;
   const rows = items.map((it, i) => {
     const f = getFood(it.foodId);
-    if (!f) return "";
+    if (!f) {
+      const nm = it.foodId.startsWith("meal:") ? `급식 ${MEAL_NAMES[it.foodId.slice(5)] || ""}` : "식품";
+      return `<li class="ck missing"><div class="ck-main"><span class="ck-name">${esc(nm)}</span><span class="ck-meta">${!mealsLoaded || sharedState === "idle" ? "불러오는 중" : "정보를 찾을 수 없어요"}</span></div>
+        <span></span><span></span><span></span><button class="x" data-act="remove" data-i="${i}" aria-label="빼기">×</button></li>`;
+    }
     const dots = Array.from({ length: it.qty }, (_, k) =>
       `<button class="dot ${k < it.eaten ? "on" : ""}" data-act="dot" data-i="${i}" data-k="${k}" aria-pressed="${k < it.eaten}" aria-label="${esc(f.name)} ${k + 1}번째 먹음"></button>`).join("");
     return `<li class="ck ${it.eaten >= it.qty ? "done" : ""}">
@@ -1041,7 +1062,7 @@ $app.addEventListener("click", async (e) => {
   switch (act) {
     case "auth-mode": ui.authMode = b.dataset.m; ui.authError = ""; return renderAuth();
     case "reload": location.reload(); return;
-    case "logout": await signOut(auth); return;
+    case "logout": await flushSave(); await signOut(auth); return;
     case "theme": S.theme = S.theme === "dark" ? "light" : "dark"; applyTheme(S.theme); return commit();
     case "panel": ui.panel = ui.panel === b.dataset.p ? null : b.dataset.p; return render();
     case "close-panel": ui.panel = null; return render();
@@ -1104,7 +1125,13 @@ $app.addEventListener("click", async (e) => {
       ui.modal.ym = ym;
       return render();
     }
-    case "qty": { const it = items[i]; it.qty = Math.max(1, Math.min(20, it.qty + Number(b.dataset.d))); it.eaten = Math.min(it.eaten, it.qty); return commit(); }
+    case "qty": {
+      const it = items[i];
+      it.qty = Math.max(1, Math.min(20, it.qty + Number(b.dataset.d)));
+      it.eaten = Math.min(it.eaten, it.qty);
+      if (it.pre) { it.pre = Math.min(it.pre, it.eaten); if (!it.pre) delete it.pre; }
+      return commit();
+    }
     case "remove": { snapshot(); const f = getFood(items[i].foodId); items.splice(i, 1); return commit(`${eul(f ? f.name : "식품")} 뺐어요`, true); }
     case "clear": snapshot(); S.today.items = []; return commit("체크리스트를 비웠어요", true);
     case "load-last": mergeItems(S.lastItems); return commit("지난번 목록을 담았어요");
@@ -1128,10 +1155,12 @@ $app.addEventListener("click", async (e) => {
         return commit("수정한 내용을 저장했어요");
       }
       if (document.getElementById("af-share")?.checked) {
+        if (b.disabled) return;
+        b.disabled = true;
         const ref = doc(collection(db, "sharedFoods"));
         const data = { name, protein: r1(protein), serving, kind, by: uid, byName: S.nickname, createdAt: Date.now() };
         try { await setDoc(ref, data); }
-        catch (e2) { console.warn(e2); err.textContent = "공유하지 못했어요. Firestore 규칙을 새로 게시했는지 확인해 주세요."; return; }
+        catch (e2) { console.warn(e2); b.disabled = false; err.textContent = "공유하지 못했어요. Firestore 규칙을 새로 게시했는지 확인해 주세요."; return; }
         sharedFoods.unshift({ ...data, docId: ref.id, id: `s:${ref.id}` });
         ui.addOpen = false; ui.filter = "shared"; ui.query = "";
         return commit(`${eul(name)} 친구들과 공유했어요`);
@@ -1211,7 +1240,7 @@ $app.addEventListener("click", async (e) => {
     case "wo-del": readSettingsForm(); ui.modal.draft.workouts = ui.modal.draft.workouts.filter((w) => w.id !== b.dataset.id); return render();
     case "back-settings": ui.modal = ui.modal.back; return render();
     case "backdrop": if (e.target === b) { ui.modal = null; render(); } return;
-    case "close-modal": ui.modal = null; return render();
+    case "close-modal": ui.modal = null; render(); if (remotePending) applyRemote(remotePending); return;
 
     case "save-settings": {
       readSettingsForm();
@@ -1297,6 +1326,7 @@ $app.addEventListener("keydown", (e) => {
 /* ---------- 시간 흐름 ---------- */
 function tick() {
   if (!S) return;
+  if (remotePending) applyRemote(remotePending);
   if (ensureToday()) {
     save(); loadMeals(); render(); loadFriends();
     toast("새로운 하루예요. 체크리스트를 새로 시작했어요.");
@@ -1307,23 +1337,55 @@ function tick() {
 }
 setInterval(tick, 30000);
 setInterval(() => { if (S && document.visibilityState === "visible") loadFriends(); }, 120000);
-document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") { tick(); if (S) loadFriends(); } });
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") { flushSave(); return; }
+  tick();
+  if (S) loadFriends();
+});
+window.addEventListener("pagehide", () => { flushSave(); });
 
 /* ---------- 로그인 상태 ---------- */
+// 키 순서와 상관없이 같은 내용인지 비교
+const stable = (v) => (Array.isArray(v) ? `[${v.map(stable).join(",")}]`
+  : v && typeof v === "object" ? `{${Object.keys(v).filter((k) => v[k] !== undefined).sort().map((k) => `${JSON.stringify(k)}:${stable(v[k])}`).join(",")}}`
+  : JSON.stringify(v ?? null));
+let unsubUser = null;
+let remotePending = null;
+// 다른 기기(예: 학교 컴퓨터)에서 바꾼 내용을 실시간으로 받아옴
+function applyRemote(data) {
+  if (!S || writing || saveTimer) { remotePending = data; return; }
+  if (stable(data) === stable(S)) { remotePending = null; return; }
+  const typing = document.activeElement && ["INPUT", "SELECT", "TEXTAREA"].includes(document.activeElement.tagName);
+  if (typing || ui.modal?.type === "settings") { remotePending = data; return; }
+  remotePending = null;
+  S = migrate(data);
+  applyTheme(S.theme);
+  if (ensureToday()) save();
+  render();
+}
 onAuthStateChanged(auth, async (user) => {
   loadError = false;
-  if (!user) { uid = null; S = null; ui.modal = null; lastFillPct = 0; sharedFoods = []; friends = []; render(); return; }
+  if (unsubUser) { unsubUser(); unsubUser = null; }
+  if (!user) {
+    uid = null; S = null; ui.modal = null; ui.panel = null; lastFillPct = 0;
+    sharedFoods = []; friends = []; publicOn = null; remotePending = null;
+    render(); return;
+  }
   uid = user.uid; S = null; render();
   try {
-    const snap = await getDoc(doc(db, "users", uid));
+    const [snap] = await Promise.all([getDoc(doc(db, "users", uid)), mealsReady || loadMeals(), fetchShared()]);
+    if (uid !== user.uid) return;
     const isNew = !snap.exists();
     S = isNew ? freshData(pendingNick || user.email.split("@")[0]) : migrate(snap.data());
     applyTheme(S.theme);
     if (ensureToday() || isNew) save();
     if (!S.weight) ui.modal = { type: "settings", first: true, draft: settingsDraft() };
     render();
-    loadShared();
     loadFriends();
+    unsubUser = onSnapshot(doc(db, "users", uid), (sn) => {
+      if (!sn.exists() || sn.metadata.hasPendingWrites || sn.metadata.fromCache) return;
+      applyRemote(sn.data());
+    }, (e) => console.warn("sync", e));
   } catch (e) {
     console.error(e);
     loadError = true; render();

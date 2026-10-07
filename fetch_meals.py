@@ -87,7 +87,7 @@ def load_old():
 
 def main():
     today = datetime.now(KST)
-    start = (today - timedelta(days=2)).strftime("%Y%m%d")
+    start = (today - timedelta(days=7)).strftime("%Y%m%d")
     end = (today + timedelta(days=10)).strftime("%Y%m%d")
     days = {k: v for k, v in load_old().items() if k >= start}
     try:
