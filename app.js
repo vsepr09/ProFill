@@ -32,7 +32,7 @@ let friendsState = "idle";
 const ui = {
   authMode: "login", authError: "", lastId: "",
   filter: "all", query: "", addOpen: false, editingFood: null,
-  mealOpen: false, modal: null, mealDay: 0,
+  panel: null, modal: null, mealDay: 0,
 };
 
 /* ---------- 도구 ---------- */
@@ -62,7 +62,7 @@ function freshData(nickname) {
     theme: document.documentElement.dataset.theme || "light",
     rollover: "empty", customFoods: [], routines: [], autoRoutineId: null,
     today: { date: dateKey(), items: [] }, lastItems: [], history: {},
-    shareProgress: false,
+    shareProgress: false, shareDetail: false,
   };
 }
 function migrate(d) {
@@ -99,7 +99,21 @@ function save() {
 // 친구 보기: 공개를 켠 사람만 닉네임, 오늘 달성률, 연속 기록을 올림
 function myPublic() {
   const t = target();
-  return { nickname: S.nickname, date: S.today.date, pct: t ? Math.round((totals().eaten / t) * 100) : 0, streak: streakInfo().now, updatedAt: Date.now() };
+  const st = streakInfo();
+  const out = { nickname: S.nickname, date: S.today.date, pct: t ? Math.round((totals().eaten / t) * 100) : 0, streak: st.now, updatedAt: Date.now(), detail: null };
+  if (S.shareDetail) {
+    recordToday();
+    const week = [];
+    for (let i = 6; i >= 0; i--) {
+      const k = dateKey(kst(Date.now() - i * 864e5));
+      week.push({ k, p: Math.round(dayPct(k) * 100) });
+    }
+    out.detail = {
+      e: totals().eaten, t, foods: S.history[S.today.date]?.f || [], week, best: st.best,
+      weight: S.weight, goal: S.goal === "custom" ? "직접 입력" : (GOALS[S.goal] || GOALS.bulk).label, factor: goalInfo().factor,
+    };
+  }
+  return out;
 }
 async function syncPublic() {
   try {
@@ -309,6 +323,7 @@ function suggest(gap) {
 
 /* ---------- 화면 ---------- */
 const ICON_MOON = `<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M20.7 14.6A8.5 8.5 0 0 1 9.4 3.3a8.5 8.5 0 1 0 11.3 11.3Z"/></svg>`;
+const FLAME = `<svg class="flame" viewBox="0 0 24 28" aria-hidden="true"><path class="fl-out" d="M12.4 1.2c.9 3.8 4.9 6.6 6.3 10.3 1.8 4.6-.4 10.1-4.6 11.9a8.1 8.1 0 0 1-9.8-3.2c-2-3.2-1.6-7.6.9-10.4.5 1.5 1.4 2.7 2.6 3.4-.6-4.6 1.4-9 4.6-12Z"/><path class="fl-in" d="M12.1 13.4c1.5 1.8 3.6 3.2 3.3 6a3.6 3.6 0 0 1-7.1.5c-.3-1.6.3-3.1 1.4-4.1.2.8.6 1.4 1.2 1.8-.1-1.6.3-3 1.2-4.2Z"/></svg>`;
 const ICON_SUN = `<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><circle cx="12" cy="12" r="4.5" fill="currentColor"/><g stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M4.9 19.1l1.8-1.8M17.3 6.7l1.8-1.8"/></g></svg>`;
 
 function render() {
@@ -328,10 +343,13 @@ function render() {
           <section class="block checklist">${checklistHTML()}</section>
           <section class="block foods">${foodsHTML()}</section>
         </div>
-        <aside class="side ${ui.mealOpen ? "open" : ""}" aria-label="오늘 급식">${mealsHTML()}</aside>
+        <aside class="side">
+          <section class="panel meal-panel ${ui.panel === "meal" ? "open" : ""}" aria-label="급식">${mealsHTML()}</section>
+          <section class="panel friends-panel ${ui.panel === "friends" ? "open" : ""}" aria-label="친구" id="friends">${friendsHTML()}</section>
+        </aside>
       </div>
     </main>
-    ${ui.mealOpen ? `<div class="side-back" data-act="toggle-meal"></div>` : ""}
+    ${ui.panel ? `<div class="side-back" data-act="close-panel"></div>` : ""}
     ${ui.modal ? modalHTML() : ""}`;
   animateFill();
 }
@@ -353,7 +371,8 @@ function headerHTML() {
     <div class="brand"><span class="brand-mark" aria-hidden="true"></span>ProFill</div>
     <div class="top-date">${esc(S.nickname)}님, ${d.getUTCMonth() + 1}월 ${d.getUTCDate()}일 ${WD[d.getUTCDay()]}요일</div>
     <nav class="top-actions">
-      <button class="btn ghost meal-toggle" data-act="toggle-meal">급식, 친구</button>
+      <button class="btn ghost panel-toggle" data-act="panel" data-p="meal">급식</button>
+      <button class="btn ghost panel-toggle" data-act="panel" data-p="friends">친구</button>
       <button class="btn ghost" data-act="open-history">기록</button>
       <button class="icon-btn" data-act="theme" aria-label="${S.theme === "dark" ? "라이트 모드로" : "다크 모드로"}" title="${S.theme === "dark" ? "라이트 모드" : "다크 모드"}">${S.theme === "dark" ? ICON_SUN : ICON_MOON}</button>
       <button class="btn ghost" data-act="open-settings">설정</button>
@@ -386,7 +405,7 @@ function heroHTML() {
         <p class="status ${t && left <= 0 ? "done" : ""}">${status}</p>
         <p class="muted">${t ? `${goal.label} 목표, ${S.weight}kg × ${goal.factor}g` : ""}${planned > eaten ? `<br>체크리스트를 다 먹으면 ${fmtG(planned)}g` : ""}</p>
       </div>
-      <div class="hero-side">${weekHTML()}${streakHTML()}</div>
+      <div class="hero-side">${streakHTML()}${weekHTML()}</div>
     </div>
     <div class="bar-wrap">
       <div class="bar" role="progressbar" aria-label="오늘 먹은 단백질" aria-valuemin="0" aria-valuemax="${t}" aria-valuenow="${eaten}">
@@ -411,9 +430,9 @@ function weekHTML() {
 }
 function streakHTML() {
   const s = streakInfo();
-  if (!target()) return "";
-  if (s.now) return `<p class="streak" title="${s.doneToday ? "오늘도 달성했어요" : "오늘도 채우면 이어져요"}"><b>${s.now}일</b> 연속 달성</p>`;
-  return `<p class="streak muted">오늘 채우면 연속 1일</p>`;
+  const state = s.doneToday ? "on" : s.now ? "wait" : "off";
+  const label = s.now ? `${s.now}일 연속 달성${s.doneToday ? "" : ", 오늘도 채우면 이어져요"}` : "연속 기록이 없어요. 오늘 목표를 채우면 시작돼요";
+  return `<button class="streak ${state}" data-act="open-history" title="${label}" aria-label="${label}">${FLAME}<b>${s.now}</b></button>`;
 }
 
 function planHTML() {
@@ -558,22 +577,19 @@ function mealsHTML() {
   const sum = codes.reduce((a, c) => a + (dm[c]?.protein || 0), 0);
   const any = day === 0 && codes.some((c) => mealFood(c));
   const t = target();
-  return `<div class="side-in">
-      <div class="sec-head"><h2>급식</h2><button class="icon-btn side-close" data-act="toggle-meal" aria-label="닫기">×</button></div>
+  return `<div class="sec-head"><h2>급식</h2><button class="icon-btn side-close" data-act="close-panel" aria-label="닫기">×</button></div>
       <div class="seg-ctl wide meal-tabs" role="group" aria-label="날짜 고르기"><button aria-pressed="${day === 0}" data-act="meal-day" data-d="0">오늘</button><button aria-pressed="${day === 1}" data-act="meal-day" data-d="1">내일</button></div>
       <p class="meal-date">${d.getUTCMonth() + 1}월 ${d.getUTCDate()}일 ${WD[d.getUTCDay()]}요일${sum ? `, 세 끼 합계 <b>${fmtG(sum)}g</b>` : ""}</p>
       ${inner}
       ${any ? `<button class="btn ghost wide" data-act="meal-all">세 끼 모두 담기</button>` : ""}
       ${day === 1 && sum && t ? `<p class="tomorrow-note">${sum >= t ? "내일은 급식만 다 먹어도 목표를 채울 수 있어요." : `내일은 급식을 다 먹어도 <b>${fmtG(t - sum)}g</b>이 모자라요. 보충제를 미리 챙겨 두세요.`}</p>` : ""}
-      <p class="hint">${esc(meals.school || "학교")} 급식표를 나이스에서 매일 자정에 받아와요. 주말과 방학에는 정보가 없을 수 있어요.</p>
-    </div>
-    <div class="friends" id="friends">${friendsHTML()}</div>`;
+`;
 }
 
 function friendsHTML() {
-  const head = `<div class="sec-head"><h2>오늘 친구들</h2>${S.shareProgress ? `<button class="link" data-act="refresh-friends">새로고침</button>` : ""}</div>`;
+  const head = `<div class="sec-head"><h2>오늘 친구들</h2><div class="head-actions">${S.shareProgress ? `<button class="link" data-act="refresh-friends">새로고침</button>` : ""}<button class="icon-btn side-close" data-act="close-panel" aria-label="닫기">×</button></div></div>`;
   if (!S.shareProgress) {
-    return `${head}<p class="small muted">내 달성률을 공개하면, 공개한 친구들의 오늘 달성률과 연속 기록을 같이 볼 수 있어요. 닉네임과 퍼센트만 보이고 먹은 음식은 보이지 않아요.</p>
+    return `${head}<p class="small muted">내 달성률을 공개하면, 공개한 친구들의 오늘 달성률과 연속 기록을 같이 볼 수 있어요.</p>
       <button class="btn primary small" data-act="share-on">공개하고 같이 보기</button>`;
   }
   if (friendsState === "error") return `${head}<p class="small muted">친구 목록을 불러오지 못했어요. Firestore 규칙을 새로 게시했는지 확인해 주세요.</p>`;
@@ -584,10 +600,50 @@ function friendsHTML() {
       <span class="fname">${esc(f.nickname)}${f.id === uid ? " (나)" : ""}</span>
       <span class="fpct">${f.pct}%</span>
       <span class="fbar"><i style="width:${Math.min(100, f.pct)}%"></i></span>
-      <span class="fstreak">${f.streak ? `${f.streak}일 연속` : ""}</span>
+      <span class="fstreak">${f.streak ? `${FLAME}${f.streak}일 연속` : ""}</span>
+      <button class="link fmore" data-act="friend-detail" data-id="${esc(f.id)}">자세히 보기</button>
     </li>`).join("");
   return `${head}${list.length ? `<ol class="friend-list">${rows}</ol>` : `<p class="small muted">아직 오늘 기록을 올린 친구가 없어요.</p>`}
-    <p class="hint">공개는 설정에서 끌 수 있어요.</p>`;
+    <p class="hint">공개 범위는 설정에서 바꿀 수 있어요.</p>`;
+}
+
+function friendHTML() {
+  const f = friends.find((x) => x.id === ui.modal.id);
+  const close = `<div class="modal-actions"><button class="btn primary" data-act="close-modal">닫기</button></div>`;
+  if (!f) return `<h2>친구</h2><p class="muted">정보를 찾을 수 없어요.</p>${close}`;
+  const me = f.id === uid;
+  const top = `<div class="fd-head"><h2>${esc(f.nickname)}${me ? " (나)" : ""}</h2><span class="fd-streak ${f.streak ? "on" : "off"}">${FLAME}<b>${f.streak || 0}</b>일 연속</span></div>`;
+  if (!f.detail) {
+    return `${top}
+      <p class="fd-pct">오늘 <b>${f.pct}%</b> 달성</p>
+      <p class="note">${me ? "자세한 정보를 공개하지 않고 있어요. 설정의 ‘자세한 정보 공개’를 켜면 친구들이 볼 수 있어요." : `${esc(f.nickname)}님은 자세한 정보를 공개하지 않았어요.`}</p>${close}`;
+  }
+  const dt = f.detail;
+  const week = (dt.week || []).map((w) => {
+    const d = new Date(keyToUTC(w.k));
+    return `<span class="day ${w.p >= 100 ? "full" : ""}"><span class="col"><i style="height:${Math.min(100, w.p)}%"></i></span><b>${WD[d.getUTCDay()]}</b></span>`;
+  }).join("");
+  const foods = (dt.foods || []).length
+    ? `<ul class="cal-foods">${dt.foods.map(([n, g]) => `<li><span>${esc(n)}</span><span>${fmtG(g)}g</span></li>`).join("")}</ul>`
+    : `<p class="muted small">아직 오늘 먹은 식품이 없어요.</p>`;
+  return `${top}
+    ${dt.weight ? `<div class="fd-profile">
+      <div><span>몸무게</span><b>${dt.weight}kg</b></div>
+      <div><span>목표</span><b>${esc(dt.goal || "")}</b><small>1kg당 ${dt.factor}g</small></div>
+    </div>` : ""}
+    <div class="fd-today">
+      <p class="cal-sum"><b>${fmtG(dt.e)}g</b> / ${dt.t}g <span class="${f.pct >= 100 ? "ok" : ""}">${f.pct}%</span></p>
+      <div class="fd-bar"><i style="width:${Math.min(100, f.pct)}%"></i></div>
+    </div>
+    <div class="cal-stats two">
+      <div><span>지금 연속</span><b>${f.streak || 0}일</b></div>
+      <div><span>최고 연속</span><b>${dt.best || 0}일</b></div>
+    </div>
+    <h3>최근 7일</h3>
+    <div class="week fd-week">${week}</div>
+    <h3>오늘 먹은 식품</h3>
+    ${foods}
+    ${close}`;
 }
 
 function historyHTML() {
@@ -638,14 +694,14 @@ function historyHTML() {
 
 function modalHTML() {
   const m = ui.modal;
-  const inner = m.type === "settings" ? settingsHTML(m.first) : m.type === "routines" ? routinesHTML() : m.type === "history" ? historyHTML() : infoHTML();
+  const inner = m.type === "settings" ? settingsHTML(m.first) : m.type === "routines" ? routinesHTML() : m.type === "history" ? historyHTML() : m.type === "friend" ? friendHTML() : infoHTML();
   return `<div class="modal-back" data-act="${m.first ? "" : "backdrop"}"><div class="modal" role="dialog" aria-modal="true">${inner}</div></div>`;
 }
 
 function settingsDraft() {
   return {
     nick: S.nickname, weight: S.weight ?? "", goal: S.goal, customFactor: S.customFactor ?? 2, rollover: S.rollover,
-    workouts: S.workouts.map((w) => ({ ...w })), share: !!S.shareProgress,
+    workouts: S.workouts.map((w) => ({ ...w })), share: !!S.shareProgress, detail: !!S.shareDetail,
   };
 }
 function readSettingsForm() {
@@ -656,6 +712,7 @@ function readSettingsForm() {
   d.goal = document.querySelector('input[name="s-goal"]:checked')?.value || d.goal;
   d.customFactor = val("s-cf");
   d.share = !!document.getElementById("s-share")?.checked;
+  d.detail = !!document.getElementById("s-detail")?.checked;
   d.rollover = val("s-roll") || d.rollover;
   d.workouts = [...document.querySelectorAll(".wo-row")].map((r) => ({
     id: r.dataset.id, start: r.querySelector(".wo-start").value, duration: r.querySelector(".wo-dur").value,
@@ -700,8 +757,11 @@ function settingsHTML(first) {
         <select id="s-roll">${roll.map(([k, l]) => `<option value="${k}" ${d.rollover === k ? "selected" : ""} ${k === "routine" && !S.routines.length ? "disabled" : ""}>${l}</option>`).join("")}</select>
         ${S.routines.length ? "" : `<p class="hint flat">루틴을 저장하면 ‘매일 자동’을 고를 수 있어요.</p>`}</fieldset>
       <fieldset><legend>친구</legend>
-        <label class="check"><input type="checkbox" id="s-share" ${d.share ? "checked" : ""}> 내 오늘 달성률과 연속 기록을 친구들에게 공개</label>
-        <p class="hint flat">닉네임과 퍼센트만 보여요. 공개해야 친구들의 기록도 볼 수 있어요.</p></fieldset>
+        <label class="switch-row"><span><b>달성률 공개</b><small>닉네임, 오늘 달성률, 연속 기록을 친구들에게 보여줘요. 켜야 친구들 기록도 볼 수 있어요.</small></span>
+          <input type="checkbox" role="switch" class="switch" id="s-share" ${d.share ? "checked" : ""}></label>
+        <label class="switch-row ${d.share ? "" : "off"}" id="s-detail-row"><span><b>자세한 정보 공개</b><small>친구가 ‘자세히 보기’를 누르면 오늘 먹은 양과 식품, 최근 7일 기록, 몸무게와 목표를 볼 수 있어요.</small></span>
+          <input type="checkbox" role="switch" class="switch" id="s-detail" ${d.share && d.detail ? "checked" : ""} ${d.share ? "" : "disabled"}></label>
+      </fieldset>
     </div>
     <p class="form-err" id="s-err"></p>
     <div class="modal-actions">${first ? "" : `<button class="btn ghost" data-act="close-modal">취소</button>`}<button class="btn primary" data-act="save-settings">저장</button></div>`;
@@ -857,7 +917,8 @@ $app.addEventListener("click", async (e) => {
     case "reload": location.reload(); return;
     case "logout": await signOut(auth); return;
     case "theme": S.theme = S.theme === "dark" ? "light" : "dark"; applyTheme(S.theme); return commit();
-    case "toggle-meal": ui.mealOpen = !ui.mealOpen; return render();
+    case "panel": ui.panel = ui.panel === b.dataset.p ? null : b.dataset.p; return render();
+    case "close-panel": ui.panel = null; return render();
 
     case "add-food": {
       const f = getFood(b.dataset.id);
@@ -880,6 +941,7 @@ $app.addEventListener("click", async (e) => {
     }
     case "meal-day": ui.mealDay = Number(b.dataset.d); return render();
     case "share-on": S.shareProgress = true; commit("이제 친구들과 달성률을 같이 봐요"); setTimeout(loadFriends, 800); return;
+    case "friend-detail": ui.panel = null; ui.modal = { type: "friend", id: b.dataset.id }; return render();
     case "refresh-friends": friendsState = "idle"; return loadFriends();
     case "open-history": ui.modal = { type: "history", ym: S.today.date.slice(0, 6), sel: S.today.date }; return render();
     case "cal-sel": ui.modal.sel = b.dataset.k; return render();
@@ -1019,8 +1081,9 @@ $app.addEventListener("click", async (e) => {
         if (!(cf >= CF_MIN && cf <= CF_MAX)) { err.textContent = `직접 입력 숫자는 ${CF_MIN}–${CF_MAX} 사이로 적어 주세요.`; return; }
         S.customFactor = r1(cf);
       }
-      const shareChanged = S.shareProgress !== d.share;
+      const shareChanged = S.shareProgress !== d.share || S.shareDetail !== (d.share && d.detail);
       S.shareProgress = d.share;
+      S.shareDetail = d.share && d.detail;
       if (shareChanged) setTimeout(loadFriends, 800);
       S.weight = r1(weight); S.goal = d.goal; S.workouts = workouts;
       S.rollover = d.rollover;
@@ -1050,6 +1113,14 @@ $app.addEventListener("click", async (e) => {
   }
 });
 
+$app.addEventListener("change", (e) => {
+  if (e.target.id === "s-share") {
+    const det = document.getElementById("s-detail");
+    det.disabled = !e.target.checked;
+    if (!e.target.checked) det.checked = false;
+    document.getElementById("s-detail-row").classList.toggle("off", !e.target.checked);
+  }
+});
 $app.addEventListener("focusin", (e) => {
   if (e.target.id === "s-cf") document.querySelector('input[name="s-goal"][value="custom"]').checked = true;
 });
