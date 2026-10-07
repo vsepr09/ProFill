@@ -1,0 +1,40 @@
+name: 급식 받고 사이트 배포
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "5 15 * * *"   # 매일 00:05 (한국 시간)
+    - cron: "0 21 * * *"   # 매일 06:00 (한국 시간) 한 번 더
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: 급식 정보 받기
+        run: python fetch_meals.py
+        env:
+          NEIS_KEY: ${{ secrets.NEIS_KEY }}
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: .
+      - id: deployment
+        uses: actions/deploy-pages@v4
