@@ -8,16 +8,22 @@ export const GOALS = {
     label: "유지",
     factor: 1.4,
     desc: "지금 근육량을 유지하면서 운동해요",
+    basis: "운동하는 사람 대부분은 하루 1.4–2.0g/kg이면 근육을 지키는 데 충분해요.",
+    source: "ISSN, 2017",
   },
   bulk: {
     label: "근육 증가",
     factor: 1.6,
     desc: "벌크업, 근육을 키우는 시기예요",
+    basis: "49개 연구를 모은 분석에서 약 1.6g/kg을 넘기면 근육이 더 늘지 않았어요.",
+    source: "Morton 외, 2018",
   },
   cut: {
     label: "체지방 감량",
     factor: 2.2,
     desc: "먹는 양을 줄이면서 근육을 지켜요",
+    basis: "덜 먹는 시기엔 근손실을 막으려 더 필요해요. 권장량(제지방 1kg당 2.3–3.1g)을 몸무게 기준으로 바꾼 값이에요.",
+    source: "Helms 외 2014, ISSN 2017",
   },
 };
 

@@ -48,7 +48,7 @@ const val = (id) => document.getElementById(id)?.value ?? "";
 /* ---------- 데이터 ---------- */
 function freshData(nickname) {
   return {
-    nickname, weight: null, goal: "bulk", workout: null,
+    nickname, weight: null, goal: "bulk", workouts: [], hiddenDefaults: [],
     theme: document.documentElement.dataset.theme || "light",
     rollover: "empty", customFoods: [], routines: [], autoRoutineId: null,
     today: { date: dateKey(), items: [] }, lastItems: [], history: {},
@@ -58,6 +58,9 @@ function migrate(d) {
   const base = freshData(d.nickname || "나");
   const out = { ...base, ...d };
   if (!out.today || !Array.isArray(out.today.items)) out.today = base.today;
+  if (!Array.isArray(d.workouts)) out.workouts = d.workout ? [{ id: newId(), ...d.workout }] : [];
+  delete out.workout;
+  if (!Array.isArray(out.hiddenDefaults)) out.hiddenDefaults = [];
   return out;
 }
 
@@ -110,7 +113,7 @@ function allFoods() {
   return [
     ...["1", "2", "3"].map(mealFood).filter(Boolean),
     ...S.customFoods.map((f) => ({ ...f, source: "custom" })),
-    ...DEFAULT_FOODS.map((f) => ({ ...f, source: "default" })),
+    ...DEFAULT_FOODS.filter((f) => !S.hiddenDefaults.includes(f.id)).map((f) => ({ ...f, source: "default" })),
   ];
 }
 function getFood(id) {
@@ -158,10 +161,10 @@ function buildPlan() {
     { time: 18 * 60 + 30, label: "저녁", meal: "3" },
     { time: 23 * 60, label: "자기 전", pref: "slow" },
   ];
-  if (S.workout) {
-    const end = Math.min(parseTime(S.workout.start) + S.workout.duration, 23 * 60 + 30);
+  for (const w of S.workouts) {
+    const end = Math.min(parseTime(w.start) + w.duration, 23 * 60 + 50);
     const near = slots.find((s) => s.time >= end - 10 && s.time - end <= 60);
-    if (near) { near.label = `${near.label} (운동 직후)`; near.post = true; }
+    if (near) { if (!near.post) near.label = `${near.label} (운동 직후)`; near.post = true; }
     else slots.push({ time: end, label: "운동 직후", post: true });
   }
   slots.sort((a, b) => a.time - b.time);
@@ -250,7 +253,7 @@ function animateFill() {
 function headerHTML() {
   const d = kst();
   return `<header class="top"><div class="wrap top-in">
-    <div class="brand"><span class="brand-mark" aria-hidden="true"></span>단백질 채우기</div>
+    <div class="brand"><span class="brand-mark" aria-hidden="true"></span>ProFill</div>
     <div class="top-date">${esc(S.nickname)}님, ${d.getUTCMonth() + 1}월 ${d.getUTCDate()}일 ${WD[d.getUTCDay()]}요일</div>
     <nav class="top-actions">
       <button class="btn ghost meal-toggle" data-act="toggle-meal">오늘 급식</button>
@@ -329,7 +332,7 @@ function planHTML() {
   }
   return `<div class="sec-head"><h2>오늘의 추천</h2><button class="link" data-act="open-info">추천 기준</button></div>
     ${summary}${body}
-    ${S.workout ? "" : `<p class="hint">설정에서 운동 시간을 넣으면 운동 직후에 먹을 것도 챙겨 드려요.</p>`}`;
+    ${S.workouts.length ? "" : `<p class="hint">설정에서 운동 시간을 넣으면 운동 직후에 먹을 것도 챙겨 드려요.</p>`}`;
 }
 
 function slotHTML(s, isNext) {
@@ -366,21 +369,24 @@ function checklistHTML() {
     empty = `<div class="empty"><p>아직 담은 식품이 없어요.${S.lastItems.length || r.length ? " 한 번에 불러올 수도 있어요." : ""}</p>
       ${S.lastItems.length || r.length ? `<div class="chips">${S.lastItems.length ? `<button class="chip" data-act="load-last">지난번 목록 불러오기</button>` : ""}${r.map((x) => `<button class="chip" data-act="load-routine" data-id="${x.id}">${esc(x.name)}</button>`).join("")}</div>` : ""}</div>`;
   }
-  return `<div class="sec-head"><h2>오늘 먹을 것</h2>
+  const { planned } = totals();
+  return `<div class="sec-head"><div><h2>오늘 먹을 것</h2><p class="sec-sub">${items.length ? `식품 ${items.length}가지, 다 먹으면 ${fmtG(planned)}g` : "아래 목록에서 골라 담아요"}</p></div>
       <div class="head-actions"><button class="btn ghost" data-act="open-routines">루틴</button>${items.length ? `<button class="btn ghost" data-act="clear">비우기</button>` : ""}</div></div>
-    ${items.length ? `<p class="hint top">먹을 때마다 동그라미를 눌러 체크해요.</p><ul class="ck-list">${rows}</ul>` : empty}`;
+    ${items.length ? `<p class="hint hint-top">먹을 때마다 동그라미를 눌러 체크해요.</p><ul class="ck-list">${rows}</ul>` : empty}`;
 }
 
 function foodsHTML() {
   const tabs = [["all", "전체"], ["meal", "급식"], ["custom", "내가 추가"], ["default", "기본"]];
-  return `<div class="sec-head"><h2>단백질 식품 목록</h2><button class="btn ${ui.addOpen ? "ghost" : "primary"}" data-act="toggle-add">${ui.addOpen ? "닫기" : "직접 추가"}</button></div>
+  const hidden = S.hiddenDefaults.length;
+  return `<div class="sec-head"><div><h2>단백질 식품 목록</h2><p class="sec-sub">여기서 골라 ‘오늘 먹을 것’에 담아요</p></div><button class="btn ${ui.addOpen ? "ghost" : "primary"}" data-act="toggle-add">${ui.addOpen ? "닫기" : "직접 추가"}</button></div>
     ${ui.addOpen ? addFormHTML() : ""}
     <div class="filters">
       <input type="search" id="foodSearch" placeholder="식품 이름으로 찾기" value="${esc(ui.query)}" aria-label="식품 검색">
       <div class="seg-ctl" role="group" aria-label="목록 거르기">${tabs.map(([k, l]) => `<button aria-pressed="${ui.filter === k}" data-act="filter" data-f="${k}">${l}</button>`).join("")}</div>
     </div>
     <ul class="food-rows" id="foodRows">${foodRowsHTML()}</ul>
-    <p class="hint">기본 식품의 단백질 양은 대략적인 값이에요. 먹는 제품의 포장지 값과 다르면 직접 추가해 주세요.</p>`;
+    <p class="hint">기본 식품의 단백질 양은 대략적인 값이에요. 먹는 제품의 포장지 값과 다르면 직접 추가해 주세요.</p>
+    ${hidden ? `<button class="link" data-act="restore-defaults">지운 기본 식품 되살리기 (${hidden}개)</button>` : ""}`;
 }
 
 function foodRowsHTML() {
@@ -394,14 +400,15 @@ function foodRowsHTML() {
   }
   return list.map((f) => {
     const inList = S.today.items.find((i) => i.foodId === f.id);
-    const tag = f.source === "meal" ? `<span class="tag meal">급식</span>` : f.source === "custom" ? `<span class="tag">내 식품</span>` : "";
+    const tag = f.source === "custom" ? `<span class="tag">내 식품</span>` : "";
     const kind = f.kind === "fast" ? `<span class="tag soft">빠른 흡수</span>` : f.kind === "slow" ? `<span class="tag soft">천천히 흡수</span>` : "";
     const btn = f.kind === "meal" && inList
       ? `<button class="btn add in" disabled>담김</button>`
       : `<button class="btn add ${inList ? "in" : ""}" data-act="add-food" data-id="${f.id}" data-n="1" aria-label="${esc(f.name)} 담기">${inList ? `담김 ${inList.qty}` : "담기"}</button>`;
     return `<li class="food">
       <div class="food-main"><span class="food-name">${esc(f.name)}</span>${tag}${kind}<span class="food-meta">${esc(f.serving)}</span></div>
-      ${f.source === "custom" ? `<span class="food-edit"><button class="link" data-act="edit-food" data-id="${f.id}">수정</button><button class="link danger" data-act="del-food" data-id="${f.id}">삭제</button></span>` : ""}
+      ${f.source === "custom" ? `<span class="food-edit"><button class="link" data-act="edit-food" data-id="${f.id}">수정</button><button class="link danger" data-act="del-food" data-id="${f.id}">삭제</button></span>`
+        : f.source === "default" ? `<span class="food-edit"><button class="link danger" data-act="hide-default" data-id="${f.id}">삭제</button></span>` : ""}
       <span class="food-g">${fmtG(f.protein)}g</span>
       ${btn}
     </li>`;
@@ -449,30 +456,52 @@ function modalHTML() {
   return `<div class="modal-back" data-act="${m.first ? "" : "backdrop"}"><div class="modal" role="dialog" aria-modal="true">${inner}</div></div>`;
 }
 
+function settingsDraft() {
+  return {
+    nick: S.nickname, weight: S.weight ?? "", goal: S.goal, rollover: S.rollover,
+    workouts: S.workouts.map((w) => ({ ...w })),
+  };
+}
+function readSettingsForm() {
+  const d = ui.modal?.draft;
+  if (!d || !document.getElementById("s-weight")) return;
+  d.nick = val("s-nick");
+  d.weight = val("s-weight");
+  d.goal = document.querySelector('input[name="s-goal"]:checked')?.value || d.goal;
+  d.rollover = val("s-roll") || d.rollover;
+  d.workouts = [...document.querySelectorAll(".wo-row")].map((r) => ({
+    id: r.dataset.id, start: r.querySelector(".wo-start").value, duration: r.querySelector(".wo-dur").value,
+  }));
+}
+
 function settingsHTML(first) {
-  const w = S.workout;
+  const d = ui.modal.draft;
   const goals = Object.entries(GOALS).map(([k, g]) => `
-    <label class="goal"><input type="radio" name="s-goal" value="${k}" ${S.goal === k ? "checked" : ""}>
+    <label class="goal"><input type="radio" name="s-goal" value="${k}" ${d.goal === k ? "checked" : ""}>
       <span class="goal-name">${g.label}</span><span class="goal-f">1kg당 ${g.factor}g</span><span class="goal-d">${g.desc}</span></label>`).join("");
+  const wo = d.workouts.map((w, n) => `
+    <div class="wo-row" data-id="${esc(w.id)}">
+      <span class="wo-n">${n + 1}</span>
+      <label>시작<input type="time" class="wo-start" min="08:00" max="23:55" step="300" value="${esc(w.start)}"></label>
+      <label>길이 (분)<input type="number" class="wo-dur" inputmode="numeric" min="5" max="480" step="5" value="${esc(w.duration)}"></label>
+      <button class="x" data-act="wo-del" data-id="${esc(w.id)}" aria-label="${n + 1}번째 운동 시간 지우기">×</button>
+    </div>`).join("");
   const roll = [["empty", "비워요"], ["yesterday", "전날 목록 그대로 (체크만 해제)"], ["routine", "‘매일 자동’ 루틴으로 채워요"]];
   return `<h2>${first ? "시작하기 전에" : "설정"}</h2>
     ${first ? `<p class="muted">몸무게와 목표를 고르면 하루 단백질 목표가 정해져요.</p>` : ""}
     <div class="form">
       <div class="row2">
-        <label>닉네임<input id="s-nick" maxlength="12" value="${esc(S.nickname)}"></label>
-        <label>몸무게 (kg)<input id="s-weight" type="number" inputmode="decimal" min="25" max="200" step="0.1" value="${S.weight ?? ""}" placeholder="예: 65"></label>
+        <label>닉네임<input id="s-nick" maxlength="12" value="${esc(d.nick)}"></label>
+        <label>몸무게 (kg)<input id="s-weight" type="number" inputmode="decimal" min="25" max="200" step="0.1" value="${esc(d.weight)}" placeholder="예: 65"></label>
       </div>
       <fieldset><legend>목표</legend><div class="goals">${goals}</div>
-        <button class="link" data-act="open-info">이 숫자의 근거</button></fieldset>
+        <button class="link left" data-act="open-info">이 숫자의 근거 보기</button></fieldset>
       <fieldset><legend>운동 시간</legend>
-        <label class="check"><input type="checkbox" id="s-wo" ${w ? "checked" : ""}> 운동하는 시간 넣기</label>
-        <div class="row2">
-          <label>시작<input type="time" id="s-wo-start" min="08:00" max="23:30" step="300" value="${w ? w.start : "17:00"}"></label>
-          <label>운동 길이<select id="s-wo-dur">${[30, 45, 60, 90, 120].map((m) => `<option value="${m}" ${(w ? w.duration : 60) === m ? "selected" : ""}>${m}분</option>`).join("")}</select></label>
-        </div></fieldset>
+        ${wo || `<p class="hint flat">운동 시간을 넣으면 운동 직후에 먹을 것도 추천해 드려요. 하루에 여러 번 넣을 수 있어요.</p>`}
+        <button class="btn ghost small left" data-act="wo-add">운동 시간 추가</button></fieldset>
       <fieldset><legend>자정이 지나면 체크리스트를</legend>
-        <select id="s-roll">${roll.map(([k, l]) => `<option value="${k}" ${S.rollover === k ? "selected" : ""} ${k === "routine" && !S.routines.length ? "disabled" : ""}>${l}</option>`).join("")}</select>
-        ${S.routines.length ? "" : `<p class="hint">루틴을 저장하면 ‘매일 자동’을 고를 수 있어요.</p>`}</fieldset>
+        <select id="s-roll">${roll.map(([k, l]) => `<option value="${k}" ${d.rollover === k ? "selected" : ""} ${k === "routine" && !S.routines.length ? "disabled" : ""}>${l}</option>`).join("")}</select>
+        ${S.routines.length ? "" : `<p class="hint flat">루틴을 저장하면 ‘매일 자동’을 고를 수 있어요.</p>`}</fieldset>
     </div>
     <p class="form-err" id="s-err"></p>
     <div class="modal-actions">${first ? "" : `<button class="btn ghost" data-act="close-modal">취소</button>`}<button class="btn primary" data-act="save-settings">저장</button></div>`;
@@ -497,19 +526,33 @@ function routinesHTML() {
 }
 
 function infoHTML() {
-  return `<h2>추천 기준</h2>
+  const w = parseFloat(ui.modal?.back?.draft?.weight) || S.weight;
+  const goals = Object.values(GOALS).map((g) => `
+    <li>
+      <div class="gb-head"><strong>${g.label}</strong><span class="gb-f">${g.factor}g/kg</span>${w ? `<span class="gb-total">하루 ${Math.round(w * g.factor)}g</span>` : ""}</div>
+      <p>${g.basis}</p><p class="gb-src">${g.source}</p>
+    </li>`).join("");
+  return `<h2>목표와 추천의 근거</h2>
     <div class="info">
-      <h3>하루 목표</h3>
-      <p>목표 = 몸무게(kg) × 목표별 숫자예요. 유지 1.4g, 근육 증가 1.6g, 체지방 감량 2.2g을 써요.</p>
-      <p>국제스포츠영양학회(ISSN)는 운동하는 사람 대부분에게 하루 1.4–2.0g/kg이면 충분하다고 봐요. 49개 연구를 모은 메타분석(Morton 외, 2018)에서는 약 1.6g/kg을 넘으면 근육이 더 늘지 않았어요. 감량 중에는 근손실을 막으려 더 많이 필요해서, 제지방 1kg당 2.3–3.1g(Helms 외, 2014)을 몸무게 기준으로 바꾼 값에 가까운 2.2g을 써요.</p>
-      <h3>시간 나누기</h3>
-      <p>ISSN은 한 번에 20–40g씩 3–4시간 간격으로 고르게 나눠 먹기를 권해요. 그래서 아침, 점심, 저녁, 자기 전을 기본으로 두고, 간격이 5시간 넘게 벌어지면 간식을 넣어요. 운동 직후에는 빠르게 흡수되는 쉐이크를, 자기 전에는 우유나 카제인처럼 천천히 흡수되는 단백질을 먼저 배치해요.</p>
-      <p class="muted">연구는 대부분 성인을 대상으로 했어요. 건강 문제가 있다면 먼저 전문가와 상의해 주세요.</p>
-      <ul class="refs">
-        <li><a href="https://pmc.ncbi.nlm.nih.gov/articles/PMC5477153/" target="_blank" rel="noopener">ISSN Position Stand: protein and exercise (2017)</a></li>
-        <li><a href="https://pubmed.ncbi.nlm.nih.gov/28698222/" target="_blank" rel="noopener">Morton 외, British Journal of Sports Medicine (2018)</a></li>
-        <li><a href="https://pubmed.ncbi.nlm.nih.gov/24092765/" target="_blank" rel="noopener">Helms 외, IJSNEM (2014)</a></li>
+      <div class="formula"><span>하루 목표</span><strong>몸무게(kg) × 목표 숫자</strong></div>
+      ${w ? `<p class="muted center-t">몸무게 ${w}kg 기준으로 계산했어요</p>` : ""}
+      <ul class="goal-basis">${goals}</ul>
+      <h3>언제 먹으면 좋을까</h3>
+      <ul class="tips">
+        <li><strong>한 번에 20–40g</strong><span>한 끼에 몰아 먹기보다 나눠 먹어요.</span></li>
+        <li><strong>3–4시간 간격</strong><span>하루 동안 고르게 나눠요. 간격이 5시간 넘게 벌어지면 간식을 추천해요.</span></li>
+        <li><strong>운동 직후</strong><span>쉐이크처럼 빨리 흡수되는 단백질을 먼저 배치해요.</span></li>
+        <li><strong>자기 전</strong><span>우유, 카제인처럼 천천히 흡수되는 단백질을 먼저 배치해요.</span></li>
       </ul>
+      <p class="gb-src">시간 나누기 기준: ISSN, 2017</p>
+      <p class="note">연구는 대부분 성인을 대상으로 했어요. 건강 문제가 있다면 먼저 전문가와 상의해 주세요.</p>
+      <details class="refs"><summary>논문 원문 보기</summary>
+        <ul>
+          <li><a href="https://pmc.ncbi.nlm.nih.gov/articles/PMC5477153/" target="_blank" rel="noopener">ISSN Position Stand: protein and exercise (2017)</a></li>
+          <li><a href="https://pubmed.ncbi.nlm.nih.gov/28698222/" target="_blank" rel="noopener">Morton 외, British Journal of Sports Medicine (2018)</a></li>
+          <li><a href="https://pubmed.ncbi.nlm.nih.gov/24092765/" target="_blank" rel="noopener">Helms 외, IJSNEM (2014)</a></li>
+        </ul>
+      </details>
     </div>
     <div class="modal-actions"><button class="btn primary" data-act="${ui.modal?.back ? "back-settings" : "close-modal"}">${ui.modal?.back ? "설정으로 돌아가기" : "닫기"}</button></div>`;
 }
@@ -518,7 +561,7 @@ function renderAuth() {
   const signup = ui.authMode === "signup";
   $app.innerHTML = `<main class="auth"><div class="auth-card">
     <div class="auth-bar" aria-hidden="true"><i></i></div>
-    <h1>단백질 채우기</h1>
+    <h1>ProFill</h1>
     <p class="muted">하루 단백질 목표를 정하고, 먹을 때마다 체크해서 채워요.</p>
     <div class="seg-ctl wide" role="group"><button aria-pressed="${!signup}" data-act="auth-mode" data-m="login">로그인</button><button aria-pressed="${signup}" data-act="auth-mode" data-m="signup">회원가입</button></div>
     <form id="authForm" class="form" novalidate>
@@ -640,6 +683,16 @@ $app.addEventListener("click", async (e) => {
       ui.addOpen = false; ui.filter = "all"; ui.query = "";
       return commit(`${name}을(를) 목록에 추가했어요`);
     }
+    case "hide-default": {
+      const f = DEFAULT_FOODS.find((x) => x.id === b.dataset.id);
+      if (!f || !confirm(`기본 식품 ‘${f.name}’을(를) 목록에서 지울까요? 체크리스트와 루틴에서도 빠져요. 나중에 되살릴 수 있어요.`)) return;
+      S.hiddenDefaults.push(f.id);
+      S.today.items = S.today.items.filter((x) => x.foodId !== f.id);
+      S.lastItems = S.lastItems.filter((x) => x.foodId !== f.id);
+      S.routines.forEach((r) => { r.items = r.items.filter((x) => x.foodId !== f.id); });
+      return commit("지웠어요");
+    }
+    case "restore-defaults": S.hiddenDefaults = []; return commit("기본 식품을 되살렸어요");
     case "del-food": {
       const f = S.customFoods.find((x) => x.id === b.dataset.id);
       if (!f || !confirm(`‘${f.name}’을(를) 목록에서 지울까요? 체크리스트와 루틴에서도 빠져요.`)) return;
@@ -650,27 +703,42 @@ $app.addEventListener("click", async (e) => {
       return commit("지웠어요");
     }
 
-    case "open-settings": ui.modal = { type: "settings" }; return render();
+    case "open-settings": ui.modal = { type: "settings", draft: settingsDraft() }; return render();
     case "open-routines": ui.modal = { type: "routines" }; return render();
-    case "open-info": ui.modal = { type: "info", back: ui.modal?.type === "settings" ? ui.modal : null }; return render();
+    case "open-info": readSettingsForm(); ui.modal = { type: "info", back: ui.modal?.type === "settings" ? ui.modal : null }; return render();
+    case "wo-add": {
+      readSettingsForm();
+      const list = ui.modal.draft.workouts;
+      const last = list[list.length - 1];
+      let start = "17:00";
+      if (last && last.start) { const m = Math.min(parseTime(last.start) + (Number(last.duration) || 60) + 120, 23 * 60); start = fmtTime(m - (m % 5)); }
+      list.push({ id: newId(), start, duration: 60 });
+      render();
+      [...document.querySelectorAll(".wo-start")].pop()?.focus();
+      return;
+    }
+    case "wo-del": readSettingsForm(); ui.modal.draft.workouts = ui.modal.draft.workouts.filter((w) => w.id !== b.dataset.id); return render();
     case "back-settings": ui.modal = ui.modal.back; return render();
     case "backdrop": if (e.target === b) { ui.modal = null; render(); } return;
     case "close-modal": ui.modal = null; return render();
 
     case "save-settings": {
+      readSettingsForm();
+      const d = ui.modal.draft;
       const err = document.getElementById("s-err");
-      const weight = parseFloat(val("s-weight"));
+      const weight = parseFloat(d.weight);
       if (!(weight >= 25 && weight <= 200)) { err.textContent = "몸무게를 25–200kg 사이로 적어 주세요."; return; }
-      const goal = document.querySelector('input[name="s-goal"]:checked')?.value || "bulk";
-      let workout = null;
-      if (document.getElementById("s-wo").checked) {
-        const start = val("s-wo-start");
-        if (!start || parseTime(start) < 8 * 60 || parseTime(start) > 23 * 60 + 30) { err.textContent = "운동 시작 시간은 08:00–23:30 사이로 골라 주세요."; return; }
-        workout = { start, duration: Number(val("s-wo-dur")) };
+      const workouts = [];
+      for (const [n, w] of d.workouts.entries()) {
+        const dur = Number(w.duration);
+        if (!w.start || parseTime(w.start) < 8 * 60) { err.textContent = `${n + 1}번째 운동의 시작 시간을 08:00 이후로 골라 주세요.`; return; }
+        if (!(dur >= 5 && dur <= 480)) { err.textContent = `${n + 1}번째 운동의 길이를 5–480분 사이로 적어 주세요.`; return; }
+        workouts.push({ id: w.id, start: w.start, duration: Math.round(dur) });
       }
-      S.nickname = val("s-nick").trim() || S.nickname;
-      S.weight = r1(weight); S.goal = goal; S.workout = workout;
-      S.rollover = val("s-roll");
+      workouts.sort((a, b) => parseTime(a.start) - parseTime(b.start));
+      S.nickname = d.nick.trim() || S.nickname;
+      S.weight = r1(weight); S.goal = d.goal; S.workouts = workouts;
+      S.rollover = d.rollover;
       if (S.rollover === "routine" && !S.routines.some((r) => r.id === S.autoRoutineId)) S.autoRoutineId = S.routines[0]?.id ?? null;
       ui.modal = null;
       return commit("설정을 저장했어요");
@@ -734,7 +802,7 @@ onAuthStateChanged(auth, async (user) => {
     S = isNew ? freshData(pendingNick || user.email.split("@")[0]) : migrate(snap.data());
     applyTheme(S.theme);
     if (ensureToday() || isNew) save();
-    if (!S.weight) ui.modal = { type: "settings", first: true };
+    if (!S.weight) ui.modal = { type: "settings", first: true, draft: settingsDraft() };
     render();
   } catch (e) {
     console.error(e);

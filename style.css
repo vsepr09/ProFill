@@ -127,7 +127,7 @@ button { cursor: pointer; }
 .sec-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
 .head-actions { display: flex; gap: 8px; }
 .hint { color: var(--muted); font-size: .85rem; margin-top: 10px; }
-.hint.top { margin: -4px 0 10px; }
+.hint.hint-top { margin: -4px 0 10px; }
 .empty { color: var(--muted); padding: 18px 0; }
 .empty .chips { margin-top: 10px; }
 .chips { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -199,7 +199,7 @@ input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1
 .food-meta { color: var(--muted); font-size: .84rem; width: 100%; }
 .food-g { font-family: var(--num); font-size: 1.15rem; font-weight: 600; min-width: 44px; text-align: right; }
 .food-edit { display: flex; gap: 6px; }
-.tag { font-size: .72rem; font-weight: 700; padding: 1px 7px; border-radius: 6px; background: var(--accent-soft); color: var(--accent); }
+.tag { flex: none; white-space: nowrap; font-size: .72rem; font-weight: 700; padding: 1px 7px; border-radius: 6px; background: var(--accent-soft); color: var(--accent); }
 .tag.soft { background: var(--surface-2); color: var(--muted); }
 .tag.meal { background: var(--ink); color: var(--bg); }
 .btn.add { justify-self: end; }
@@ -299,4 +299,57 @@ legend { font-weight: 700; font-size: .95rem; margin-bottom: 6px; padding: 0; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
+}
+
+/* ---------- v2: 구역 구분 ---------- */
+.sec-sub { color: var(--muted); font-size: .86rem; margin-top: 2px; }
+.checklist {
+  background: var(--surface); border: 2px solid var(--accent); border-radius: 16px;
+  padding: 18px 20px 14px;
+}
+.checklist h2 { font-size: 1.3rem; }
+.checklist .ck-list { border-top-color: var(--line); }
+.checklist .ck:last-child { border-bottom: 0; }
+.foods {
+  background: var(--surface-2); border-radius: 16px; padding: 18px 20px 16px;
+  margin-top: 8px;
+}
+.foods .food { border-bottom-color: var(--line); }
+.foods input[type="search"] { background: var(--surface); }
+.foods .add-form { background: var(--surface); }
+.foods .link[data-act="restore-defaults"] { margin-top: 6px; }
+
+/* 설정: 운동 시간 여러 개 */
+.wo-row { display: grid; grid-template-columns: 26px 1fr 1fr 30px; align-items: end; gap: 10px; }
+.wo-n { width: 24px; height: 24px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); font-weight: 700; font-size: .8rem; display: grid; place-items: center; margin-bottom: 8px; }
+.wo-row .x { margin-bottom: 4px; }
+.link.left, .btn.left { justify-self: start; }
+.hint.flat { margin-top: 0; }
+
+/* 근거 화면 */
+.info { gap: 14px; }
+.formula { display: grid; justify-items: center; gap: 2px; background: var(--accent-soft); color: var(--accent); border-radius: 12px; padding: 14px; }
+.formula span { font-size: .85rem; font-weight: 600; }
+.formula strong { font-size: 1.15rem; }
+.center-t { text-align: center; font-size: .85rem; margin-top: -6px; }
+.goal-basis { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.goal-basis li { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; display: grid; gap: 4px; }
+.gb-head { display: flex; align-items: baseline; gap: 10px; }
+.gb-head strong { font-size: 1rem; }
+.gb-f { font-family: var(--num); font-size: 1.25rem; font-weight: 600; color: var(--accent); }
+.gb-total { margin-left: auto; font-weight: 700; font-size: .9rem; }
+.goal-basis p { font-size: .92rem; line-height: 1.6; }
+.gb-src { color: var(--muted); font-size: .8rem !important; }
+.info h3 { margin-top: 8px; font-size: 1.05rem; }
+.tips { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.tips li { display: grid; grid-template-columns: 112px 1fr; gap: 10px; align-items: baseline; font-size: .92rem; line-height: 1.55; }
+.tips strong { color: var(--accent); }
+.note { background: var(--surface-2); border-radius: 10px; padding: 10px 12px; font-size: .86rem; color: var(--muted); }
+.refs summary { cursor: pointer; font-size: .88rem; font-weight: 600; color: var(--accent); }
+.refs ul { margin: 8px 0 0; padding-left: 18px; font-size: .86rem; }
+
+@media (max-width: 600px) {
+  .checklist, .foods { padding: 16px 14px 12px; }
+  .tips li { grid-template-columns: 1fr; gap: 0; }
+  .wo-row { grid-template-columns: 22px 1fr 1fr 28px; gap: 8px; }
 }
