@@ -1,9 +1,24 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // 각자 자기 기록만 읽고 쓸 수 있어요
     match /users/{userId} {
       allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+    match /sharedFoods/{foodId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null
+        && request.resource.data.by == request.auth.uid
+        && request.resource.data.name is string
+        && request.resource.data.name.size() > 0
+        && request.resource.data.name.size() <= 30
+        && request.resource.data.protein is number
+        && request.resource.data.protein > 0
+        && request.resource.data.protein <= 200;
+      allow delete: if request.auth != null && resource.data.by == request.auth.uid;
+    }
+    match /public/{userId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && request.auth.uid == userId;
     }
   }
 }

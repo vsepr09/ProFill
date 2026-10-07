@@ -103,7 +103,7 @@ button { cursor: pointer; }
 .day b { font-weight: 600; }
 .day.today b { color: var(--ink); }
 
-.bar-wrap { position: relative; margin-top: 26px; padding-bottom: 26px; }
+.bar-wrap { position: relative; margin-top: 34px; padding-bottom: 26px; }
 .bar { position: relative; height: 64px; border-radius: 12px; background: var(--surface-2); overflow: hidden; }
 .planned { position: absolute; inset: 0 auto 0 0; background: repeating-linear-gradient(-45deg, var(--planned) 0 8px, transparent 8px 14px); opacity: .9; }
 .fill { position: absolute; inset: 0 auto 0 0; width: 0; transition: width .7s cubic-bezier(.2, .8, .2, 1); overflow: hidden; }
@@ -361,3 +361,84 @@ legend { font-weight: 700; font-size: .95rem; margin-bottom: 6px; padding: 0; }
 .cf-row { display: flex; align-items: center; gap: 6px; font-family: var(--num); font-size: 1.2rem; font-weight: 600; color: var(--accent); }
 .cf-row input { width: 76px; padding: 4px 8px; font-family: var(--num); font-size: 1.1rem; font-weight: 600; color: var(--ink); text-align: center; }
 .foods-foot { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px 16px; margin-top: 8px; }
+
+/* ---------- v3 ---------- */
+.small { font-size: .86rem; }
+/* 히어로 오른쪽: 7일 막대 + 연속 기록 */
+.hero-side { margin-left: auto; display: grid; justify-items: end; gap: 6px; padding-bottom: 6px; }
+.week { margin-left: 0; padding: 6px 8px; border: 1px solid transparent; border-radius: 10px; background: transparent; cursor: pointer; }
+.week:hover { border-color: var(--line); background: var(--surface); }
+.day { display: grid; }
+.streak { font-size: .85rem; }
+.streak b { font-family: var(--num); font-size: 1.15rem; color: var(--accent); }
+
+/* 급식 양 */
+.stepper.portion span { min-width: 58px; font-size: .88rem; }
+
+/* 급식 패널 */
+.side { max-height: calc(100vh - 90px); overflow-y: auto; display: grid; gap: 14px; scrollbar-width: thin; }
+.meal-tabs { margin: 0 0 10px; }
+.meal-date { font-size: .86rem; color: var(--muted); margin-bottom: 8px; }
+.meal-date b { color: var(--ink); }
+.tomorrow-note { background: var(--surface); border-radius: 10px; padding: 10px 12px; font-size: .86rem; margin-top: 8px; }
+.tomorrow-note b { color: var(--warn); }
+
+/* 친구 */
+.friends { background: var(--surface-2); border-radius: 14px; padding: 18px; }
+.friends .btn { margin-top: 10px; }
+.friend-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.friend-list li { display: grid; grid-template-columns: 22px 1fr auto; grid-template-areas: "rank name pct" "rank bar bar" "rank st st"; column-gap: 8px; row-gap: 3px; align-items: center; }
+.friend-list .rank { grid-area: rank; align-self: start; font-family: var(--num); font-weight: 700; font-size: 1.1rem; color: var(--muted); }
+.friend-list li:nth-child(-n+3) .rank { color: var(--accent); }
+.friend-list .fname { grid-area: name; font-weight: 600; font-size: .92rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.friend-list .fpct { grid-area: pct; font-family: var(--num); font-weight: 600; font-size: 1.05rem; }
+.friend-list .fbar { grid-area: bar; height: 6px; border-radius: 3px; background: var(--surface); overflow: hidden; }
+.friend-list .fbar i { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
+.friend-list .fstreak { grid-area: st; font-size: .76rem; color: var(--muted); }
+.friend-list li.me .fname { color: var(--accent); }
+
+/* 식품: 공유 */
+.tag.shared { background: var(--ok); color: var(--surface); }
+.add-form .f-share { grid-column: 1 / -1; font-weight: 600; color: var(--ink); }
+
+/* 기록 달력 */
+.cal-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.cal-stats div { background: var(--surface-2); border-radius: 10px; padding: 10px 12px; display: grid; gap: 2px; }
+.cal-stats span { font-size: .8rem; color: var(--muted); font-weight: 600; }
+.cal-stats b { font-family: var(--num); font-size: 1.5rem; font-weight: 700; line-height: 1.1; }
+.cal-nav { display: flex; align-items: center; justify-content: space-between; margin-top: 4px; }
+.cal-nav .icon-btn:disabled { opacity: .35; cursor: default; }
+.cal { display: grid; grid-template-columns: repeat(7, 1fr); gap: 5px; }
+.cal-w { text-align: center; font-size: .78rem; color: var(--muted); font-weight: 600; padding-bottom: 2px; }
+.cal-d { height: 42px; border: 1.5px solid transparent; border-radius: 9px; background: var(--surface-2); font-family: var(--num); font-size: 1rem; font-weight: 600; color: var(--ink); padding: 0; }
+.cal-d:disabled { background: transparent; color: var(--muted); opacity: .45; cursor: default; }
+.cal-d.l1 { background: color-mix(in srgb, var(--accent) 18%, var(--surface-2)); }
+.cal-d.l2 { background: color-mix(in srgb, var(--accent) 38%, var(--surface-2)); }
+.cal-d.l3 { background: color-mix(in srgb, var(--accent) 62%, var(--surface-2)); color: var(--accent-ink); }
+.cal-d.l4 { background: var(--accent); color: var(--accent-ink); }
+.cal-d.today { border-color: var(--ink); }
+.cal-d.sel { outline: 2px solid var(--accent); outline-offset: 2px; }
+.cal-legend { display: flex; gap: 14px; justify-content: flex-end; font-size: .78rem; color: var(--muted); }
+.cal-legend span { display: inline-flex; align-items: center; gap: 5px; }
+.cal-legend i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+.cal-legend i.l1 { background: color-mix(in srgb, var(--accent) 18%, var(--surface-2)); }
+.cal-legend i.l3 { background: color-mix(in srgb, var(--accent) 62%, var(--surface-2)); }
+.cal-legend i.l4 { background: var(--accent); }
+.cal-detail { border-top: 1px solid var(--line); padding-top: 12px; display: grid; gap: 8px; }
+.cal-sum { font-size: .95rem; }
+.cal-sum b { font-family: var(--num); font-size: 1.4rem; }
+.cal-sum span { margin-left: 6px; font-weight: 700; color: var(--muted); }
+.cal-sum span.ok { color: var(--ok); }
+.cal-foods { list-style: none; margin: 0; padding: 0; }
+.cal-foods li { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--line); font-size: .92rem; }
+.cal-foods li span:last-child { font-family: var(--num); font-weight: 600; }
+
+@media (max-width: 860px) {
+  .side { max-height: none; display: block; }
+  .side .friends { margin: 0; border-radius: 0; border-top: 1px solid var(--line); }
+  .side .side-in { min-height: 0; }
+}
+@media (max-width: 600px) {
+  .hero-side { margin-left: 0; justify-items: start; }
+  .top-actions .btn.ghost[data-act="open-settings"], .top-actions .btn.ghost[data-act="open-history"] { padding: 8px 10px; }
+}
