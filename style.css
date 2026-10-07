@@ -574,3 +574,6 @@ legend { font-weight: 700; font-size: .95rem; margin-bottom: 6px; padding: 0; }
 .meal ul.dishes li { padding: 0; }
 
 .ck.missing .ck-name { color: var(--muted); }
+.danger-zone { margin-top: 4px; }
+.danger-zone .row-inline input { flex: 1; }
+.btn.danger { background: var(--danger); border-color: var(--danger); color: #fff; }

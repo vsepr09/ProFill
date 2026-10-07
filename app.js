@@ -2,6 +2,7 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/fireba
 import {
   getAuth, onAuthStateChanged, signInWithEmailAndPassword,
   createUserWithEmailAndPassword, signOut,
+  EmailAuthProvider, reauthenticateWithCredential, deleteUser,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import {
   initializeFirestore, persistentLocalCache, persistentMultipleTabManager, doc, getDoc, setDoc, deleteDoc,
@@ -65,7 +66,7 @@ function freshData(nickname) {
     theme: document.documentElement.dataset.theme || "light",
     rollover: "empty", customFoods: [], routines: [], autoRoutineId: null,
     today: { date: dateKey(), items: [] }, lastItems: [], history: {},
-    shareProgress: false, shareDetail: false, cutoff: "18:30", yesterday: null,
+    shareProgress: false, shareDetail: false, cutoff: "18:20", cutoffV: 2, yesterday: null,
   };
 }
 function migrate(d) {
@@ -75,7 +76,9 @@ function migrate(d) {
   if (!Array.isArray(d.workouts)) out.workouts = d.workout ? [{ id: newId(), ...d.workout }] : [];
   delete out.workout;
   if (!Array.isArray(out.hiddenDefaults)) out.hiddenDefaults = [];
-  if (d.cutoff === undefined) out.cutoff = "18:30";
+  // 처음 기본값(18:30)을 쓰던 사람은 저녁 급식 시간(18:20)에 맞춰 한 번만 바꿈
+  if (d.cutoff === undefined || (d.cutoff === "18:30" && !d.cutoffV)) out.cutoff = "18:20";
+  out.cutoffV = 2;
   for (const h of Object.values(out.history || {})) {
     if (Array.isArray(h.f)) h.f = h.f.map((x) => (Array.isArray(x) ? { n: x[0], g: x[1] } : x));
   }
@@ -100,15 +103,16 @@ function recordToday() {
   const keys = Object.keys(S.history).sort();
   while (keys.length > 370) delete S.history[keys.shift()];
 }
-let writing = 0;          // 서버로 보내는 중인 저장 수 (이때 들어온 원격 변경은 무시)
+let writing = 0;
+let deleting = false;     // 계정 삭제 중에는 저장하지 않음          // 서버로 보내는 중인 저장 수 (이때 들어온 원격 변경은 무시)
 function save() {
-  if (!S || !uid) return;
+  if (!S || !uid || deleting) return;
   recordToday();
   clearTimeout(saveTimer);
   saveTimer = setTimeout(flushSave, 500);
 }
 async function flushSave() {
-  if (!saveTimer || !S || !uid) return;
+  if (!saveTimer || !S || !uid || deleting) return;
   clearTimeout(saveTimer); saveTimer = null;
   const who = uid, data = JSON.parse(JSON.stringify(S));
   writing++;
@@ -482,14 +486,15 @@ const cutoffMin = () => (S.cutoff ? parseTime(S.cutoff) : null);
 function nightPlan() {
   const c = cutoffMin();
   if (c == null) return null;
-  const slots = buildPlan().shown.filter((s) => !s.past && s.time >= c);
+  // 마감 이후 시간대 + 저녁 급식은 항상 포함
+  const slots = buildPlan().shown.filter((s) => !s.past && (s.time >= c || s.meal === "3"));
   const counts = {};
   slots.forEach((s) => s.items.forEach((f) => { counts[f.id] = (counts[f.id] || 0) + 1; }));
   return { slots, counts, units: Object.values(counts).reduce((a, b) => a + b, 0) };
 }
 function nightHTML() {
   const c = cutoffMin();
-  if (c == null || nowMin() < c - 60) return "";
+  if (c == null || nowMin() < Math.min(16 * 60, c - 60)) return "";
   const np = nightPlan();
   const pre = S.today.items.some((i) => i.pre);
   if (!np.units) {
@@ -899,7 +904,7 @@ function settingsHTML(first) {
         <button class="btn ghost small left" data-act="wo-add">운동 시간 추가</button></fieldset>
       <fieldset><legend>기기 사용 마감 시간</legend>
         <div class="row-cut"><input type="time" id="s-cutoff" step="300" value="${esc(d.cutoff)}" aria-label="기기 사용 마감 시간"><button class="link" data-act="cutoff-clear">사용 안 함</button></div>
-        <p class="hint flat">이 시간 1시간 전부터 ‘오늘 밤 먹을 것’을 보여 주고, 미리 체크할 수 있어요. 다음 날 낮 12시까지는 어제 기록을 고칠 수 있어요.</p></fieldset>
+        <p class="hint flat">오후 4시부터 ‘오늘 밤 먹을 것’을 보여 주고, 저녁 급식과 이 시간 이후에 먹을 것을 미리 체크할 수 있어요. 다음 날 낮 12시까지는 어제 기록을 고칠 수 있어요.</p></fieldset>
       <fieldset><legend>자정이 지나면 체크리스트를</legend>
         <select id="s-roll">${roll.map(([k, l]) => `<option value="${k}" ${d.rollover === k ? "selected" : ""} ${k === "routine" && !S.routines.length ? "disabled" : ""}>${l}</option>`).join("")}</select>
         ${S.routines.length ? "" : `<p class="hint flat">루틴을 저장하면 ‘매일 자동’을 고를 수 있어요.</p>`}</fieldset>
@@ -909,6 +914,13 @@ function settingsHTML(first) {
         <label class="switch-row ${d.share ? "" : "off"}" id="s-detail-row"><span><b>자세한 정보 공개</b><small>친구가 ‘자세히 보기’를 누르면 오늘 먹은 양과 식품, 최근 7일 기록, 몸무게와 목표를 볼 수 있어요.</small></span>
           <input type="checkbox" role="switch" class="switch" id="s-detail" ${d.share && d.detail ? "checked" : ""} ${d.share ? "" : "disabled"}></label>
       </fieldset>
+      ${first ? "" : `<fieldset class="danger-zone"><legend>계정</legend>
+        ${d.delStep ? `<p class="small">기록, 루틴, 친구 목록 공개 정보, 내가 공유한 식품이 모두 지워지고 되돌릴 수 없어요. 계속하려면 비밀번호를 입력해 주세요.</p>
+          <div class="row-inline"><input type="password" id="del-pw" autocomplete="current-password" placeholder="비밀번호" aria-label="비밀번호">
+            <button class="btn danger" data-act="delete-account">영구 삭제</button><button class="btn ghost" data-act="delete-cancel">그만두기</button></div>
+          <p class="form-err" id="del-err"></p>`
+        : `<button class="link danger left" data-act="delete-start">계정 삭제</button>`}
+      </fieldset>`}
     </div>
     <p class="form-err" id="s-err"></p>
     <div class="modal-actions">${first ? "" : `<button class="btn ghost" data-act="close-modal">취소</button>`}<button class="btn primary" data-act="save-settings">저장</button></div>`;
@@ -1236,6 +1248,42 @@ $app.addEventListener("click", async (e) => {
       [...document.querySelectorAll(".wo-start")].pop()?.focus();
       return;
     }
+    case "delete-start": readSettingsForm(); ui.modal.draft.delStep = true; render(); document.getElementById("del-pw")?.focus(); return;
+    case "delete-cancel": readSettingsForm(); ui.modal.draft.delStep = false; return render();
+    case "delete-account": {
+      const pw = val("del-pw");
+      const err = document.getElementById("del-err");
+      if (!pw) { err.textContent = "비밀번호를 입력해 주세요."; return; }
+      if (b.disabled) return;
+      b.disabled = true; b.textContent = "지우는 중";
+      const user = auth.currentUser;
+      try {
+        await reauthenticateWithCredential(user, EmailAuthProvider.credential(user.email, pw));
+      } catch (e2) {
+        b.disabled = false; b.textContent = "영구 삭제";
+        err.textContent = ["auth/wrong-password", "auth/invalid-credential", "auth/invalid-login-credentials"].includes(e2.code) ? "비밀번호가 맞지 않아요." : `확인하지 못했어요 (${e2.code})`;
+        return;
+      }
+      const who = user.uid;
+      deleting = true;
+      clearTimeout(saveTimer); saveTimer = null;
+      if (unsubUser) { unsubUser(); unsubUser = null; }
+      try {
+        const mine = await getDocs(query(collection(db, "sharedFoods"), where("by", "==", who)));
+        await Promise.all(mine.docs.map((x) => deleteDoc(x.ref)));
+        await deleteDoc(doc(db, "public", who));
+        await deleteDoc(doc(db, "users", who));
+        await deleteUser(user);
+        ui.modal = null;
+        setTimeout(() => toast("계정을 삭제했어요"), 300);
+      } catch (e2) {
+        console.error(e2);
+        deleting = false;
+        err.textContent = `삭제하다 멈췄어요 (${e2.code || e2.message}). 인터넷 연결을 확인하고 다시 시도해 주세요.`;
+        b.disabled = false; b.textContent = "영구 삭제";
+      }
+      return;
+    }
     case "cutoff-clear": { const el = document.getElementById("s-cutoff"); if (el) el.value = ""; return; }
     case "wo-del": readSettingsForm(); ui.modal.draft.workouts = ui.modal.draft.workouts.filter((w) => w.id !== b.dataset.id); return render();
     case "back-settings": ui.modal = ui.modal.back; return render();
@@ -1367,6 +1415,7 @@ onAuthStateChanged(auth, async (user) => {
   loadError = false;
   if (unsubUser) { unsubUser(); unsubUser = null; }
   if (!user) {
+    deleting = false;
     uid = null; S = null; ui.modal = null; ui.panel = null; lastFillPct = 0;
     sharedFoods = []; friends = []; publicOn = null; remotePending = null;
     render(); return;
