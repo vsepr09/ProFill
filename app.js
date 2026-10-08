@@ -218,7 +218,7 @@ function ensureToday() {
   // 지난 날 기록을 마지막으로 남기고, 다음 날 아침에 고칠 수 있게 복사해 둠
   recordToday();
   S.yesterday = null;
-  if (S.today.items.length || cleanParts(S.today.parts).length) {
+  {
     const items = [];
     for (const it of S.today.items) {
       const f = getFood(it.foodId);
@@ -601,7 +601,9 @@ function cleanProgram(p) {
     name: str(x?.name, 20).trim(), parts: cleanParts(x?.parts), memo: str(x?.memo, 200).trim(),
   }));
   const sched = Array.from({ length: 7 }, (_, i) => {
-    const v = Math.round(num(p.sched?.[i], -1, 6));
+    const raw = Number(p.sched?.[i]);
+    if (!Number.isFinite(raw)) return -1;
+    const v = Math.round(Math.min(6, Math.max(-1, raw)));
     return v < splits.length ? v : -1;
   });
   return { name: str(p.name, 20).trim(), splits, sched };
@@ -838,8 +840,12 @@ function reportHTML(inline) {
 /* ---------- 다음 날 아침, 어제 마무리 ---------- */
 function ydayActive() {
   const y = S.yesterday;
-  if (!y || y.done || (!y.items?.length && !y.parts)) return false;
-  return y.date === utcToKey(keyToUTC(S.today.date) - 864e5) && nowMin() < 12 * 60;
+  if (!y || y.done) return false;
+  if (y.date !== utcToKey(keyToUTC(S.today.date) - 864e5) || nowMin() >= 12 * 60) return false;
+  if (y.items?.length || cleanParts(y.parts).length) return true;
+  // 어제 아무것도 기록하지 않았는데 운동법상 운동하는 날이었다면 보여 줌
+  const prog = cleanProgram(S.program);
+  return !!prog && prog.sched[(new Date(keyToUTC(y.date)).getUTCDay() + 6) % 7] >= 0;
 }
 function ydayRecalc() {
   const y = S.yesterday;
