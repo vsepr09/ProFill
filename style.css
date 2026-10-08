@@ -673,3 +673,7 @@ legend { font-weight: 700; font-size: .95rem; margin-bottom: 6px; padding: 0; }
   .workout { padding: 16px 14px; }
   .pg-days { grid-template-columns: repeat(4, 1fr); }
 }
+.part .pl.stale { color: var(--warn); font-weight: 700; }
+.rp-gym p { font-size: .92rem; background: var(--surface-2); border-radius: 10px; padding: 10px 12px; line-height: 1.6; }
+.rp-gym b { color: var(--accent); margin-right: 6px; }
+.rp-tip { display: block; margin-top: 4px; color: var(--muted); font-size: .84rem; }

@@ -74,6 +74,11 @@ const eul = (w) => {
   if (c >= 0xac00 && c <= 0xd7a3) return `${w}${(c - 0xac00) % 28 ? "을" : "를"}`;
   return `${w}을(를)`;
 };
+const eun = (w) => {
+  const c = String(w).trim().slice(-1).charCodeAt(0);
+  if (c >= 0xac00 && c <= 0xd7a3) return `${w}${(c - 0xac00) % 28 ? "은" : "는"}`;
+  return `${w}은(는)`;
+};
 const val = (id) => document.getElementById(id)?.value ?? "";
 
 /* ---------- 데이터 ---------- */
@@ -635,8 +640,10 @@ function workoutHTML() {
   const planned = plan?.split?.parts || [];
   const chips = PARTS.map((p) => {
     const on = parts.includes(p);
-    return `<button class="part ${on ? "on" : ""} ${planned.includes(p) && !on ? "plan" : ""}" data-act="part" data-p="${p}" aria-pressed="${on}">
-      <span class="pn">${p}</span><span class="pl">${on ? "오늘" : agoLabel(lastDone(p))}</span></button>`;
+    const ago = on ? null : lastDone(p);
+    const stale = ago != null && ago >= 7;   // 7일 넘게 쉰 부위는 주황색으로
+    return `<button class="part ${on ? "on" : ""} ${planned.includes(p) && !on ? "plan" : ""}" data-act="part" data-p="${p}" aria-pressed="${on}"${stale ? ` title="${ago}일 동안 안 했어요"` : ""}>
+      <span class="pn">${p}</span><span class="pl ${stale ? "stale" : ""}">${on ? "오늘" : agoLabel(ago)}</span></button>`;
   }).join("");
   return `<div class="sec-head"><div><h2>오늘 운동한 부위</h2><p class="sec-sub">${sub}</p></div>
       <button class="btn ghost" data-act="open-program">나의 운동법</button></div>
@@ -757,7 +764,44 @@ function reportData(days = weekRange(-1)) {
     foods[n] = (foods[n] || 0) + g;
   }));
   const top = Object.entries(foods).sort((a, b) => b[1] - a[1]).slice(0, 3);
-  return { days, rec, avg, avgT, done, weakest, top };
+  // 운동 요약
+  const cnt = Object.fromEntries(PARTS.map((p) => [p, 0]));
+  let gymDays = 0;
+  days.forEach((k) => {
+    const ps = cleanParts(S.history[k]?.parts);
+    if (ps.length) gymDays++;
+    ps.forEach((p) => cnt[p]++);
+  });
+  const most = Math.max(...Object.values(cnt));
+  const mostParts = most ? PARTS.filter((p) => cnt[p] === most) : [];
+  // 나의 운동법이 있으면 그 기준으로: 계획한 운동일, 운동법에 있는데 안 한 부위
+  const prog = cleanProgram(S.program);
+  let plan = null;
+  if (prog) {
+    const myParts = PARTS.filter((p) => prog.splits.some((sp) => sp.parts.includes(p)));
+    plan = {
+      days: prog.sched.filter((v) => v >= 0).length,
+      skipped: myParts.filter((p) => !cnt[p]),
+    };
+  }
+  return { days, rec, avg, avgT, done, weakest, top, gym: { days: gymDays, most, mostParts, plan } };
+}
+function gymSummary(g) {
+  const head = `<b>운동</b>`;
+  if (g.plan) {
+    const days = g.plan.days
+      ? `계획한 ${g.plan.days}일 중 ${Math.min(g.days, g.plan.days)}일${g.days > g.plan.days ? ` (계획보다 ${g.days - g.plan.days}일 더)` : ""} 했어요.`
+      : `${g.days}일 했어요.`;
+    if (!g.days) return `${head} ${g.plan.days ? `계획한 ${g.plan.days}일 중 운동한 날이 없어요.` : "지난주에는 운동 기록이 없어요."}`;
+    const most = `가장 많이 한 부위는 ${g.mostParts.join(", ")}(${g.most}번)`;
+    const skip = g.plan.skipped.length
+      ? `이고, 운동법에 있는 ${eun(g.plan.skipped.join(", "))} 한 번도 안 했어요.`
+      : "이에요. 운동법에 있는 부위를 모두 했어요.";
+    return `${head} ${days} ${most}${skip}`;
+  }
+  if (!g.days) return `${head} 지난주에는 운동 기록이 없어요.`;
+  return `${head} ${g.days}일 했어요. 가장 많이 한 부위는 ${g.mostParts.join(", ")}(${g.most}번)이에요.
+    <span class="rp-tip">‘나의 운동법’을 정해 두면 계획대로 했는지, 빠뜨린 부위가 있는지도 알려 줘요.</span>`;
 }
 function reportActive() {
   if (new Date(keyToUTC(S.today.date)).getUTCDay() !== 1) return false;   // 월요일에만
@@ -781,6 +825,7 @@ function reportHTML(inline) {
       <div><span>가장 부족한 날</span><b>${WD[wk.getUTCDay()]}요일</b><small>${Math.round((r.weakest.h.e / r.weakest.h.t) * 100)}%</small></div>
     </div>
     <div class="week fd-week rp-week">${bars}</div>
+    <div class="rp-gym"><p>${gymSummary(r.gym)}</p></div>
     ${r.top.length ? `<h3>가장 많이 먹은 것</h3><ul class="cal-foods">${r.top.map(([n, g]) => `<li><span>${esc(n)}</span><span>${fmtG(g)}g</span></li>`).join("")}</ul>` : ""}`;
   if (inline) {
     return `<div class="sec-head"><div><h2>지난주 리포트</h2><p class="sec-sub">${range}</p></div></div>${body}
@@ -1219,11 +1264,12 @@ function settingsHTML(first) {
 
 function guideHTML() {
   return `<h2>ProFill 사용법</h2>
-    <p class="muted">하루 단백질, 이렇게 세 단계로 채워요.</p>
+    <p class="muted">하루 단백질과 운동을 이렇게 기록해요.</p>
     <ol class="guide">
       <li><span class="g-n">1</span><div><b>오늘 먹을 것 담기</b><p>식품 목록이나 급식 칸에서 오늘 먹을 것을 <span class="g-btn">담기</span> 해요. 그러면 언제 무엇을 먹을지 ‘오늘의 추천’에 나와요.</p></div></li>
       <li><span class="g-n">2</span><div><b>먹을 때마다 체크</b><p>‘오늘 먹을 것’에서 먹을 때마다 동그라미 <span class="g-dot"></span> 를 눌러요.</p></div></li>
       <li><span class="g-n">3</span><div><b>bar 채우기</b><p>맨 위 bar가 채워지고, 목표를 채운 날이 이어지면 파란 불꽃 ${FLAME} 숫자가 올라가요.</p></div></li>
+      <li><span class="g-n">4</span><div><b>운동한 부위 체크</b><p>‘오늘 운동한 부위’에서 운동한 부위를 눌러요. <span class="g-btn">나의 운동법</span> 에 분할과 요일을 정해 두면 그날 할 부위를 알려 주고, 오래 쉰 부위는 주황색으로 보여 줘요.</p></div></li>
     </ol>
     <p class="note">저녁에 기기를 못 쓰면, 오후 4시부터 뜨는 ‘오늘 밤 먹을 것’에서 미리 체크하고 다음 날 아침에 고치면 돼요.</p>
     <div class="modal-actions"><button class="btn primary" data-act="guide-done">시작하기</button></div>`;
