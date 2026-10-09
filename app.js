@@ -9,9 +9,9 @@ import {
   collection, getDocs, query, where, onSnapshot, getDocFromCache,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 import { firebaseConfig } from "./firebase-config.js";
-import { GOALS, KINDS } from "./data.js?v=1.4.0";
+import { GOALS, KINDS } from "./data.js?v=1.4.1";
 
-const APP_VERSION = "1.4.0";
+const APP_VERSION = "1.4.1";
 /* ---------- Firebase ---------- */
 const fbApp = initializeApp(firebaseConfig);
 const auth = getAuth(fbApp);
@@ -305,7 +305,7 @@ function loadMeals() { mealsReady = fetchMeals(); return mealsReady; }
 async function fetchMeals() {
   try {
     const r = await fetch(`data/meals.json?t=${Date.now()}`, { cache: "no-store" });
-    if (r.ok) { meals = await r.json(); mealsOk = true; }
+    if (r.ok) { meals = await r.json(); mealsOk = Object.keys(meals?.days || {}).length > 0; }
   } catch (e) { /* 급식 파일이 없어도 나머지는 동작 */ }
   mealsLoaded = true;
   if (S) softRender();
@@ -395,7 +395,7 @@ function mealFood(code) {
 // 그날 급식 정보가 없는 끼니는 집밥으로 (단백질은 직접 조절)
 const HOME_G = 20;
 function homeFood(code) {
-  if (!mealsLoaded || todayMeals()[code]) return null;
+  if (!mealsLoaded || mealFood(code)) return null;   // 급식 단백질 정보가 없으면 집밥으로
   const g = num(S.homeG?.[code] ?? HOME_G, 0, 200);
   return { id: `home:${code}`, name: MEAL_NAMES[code], serving: "1끼", protein: r1(g), kind: "meal", mealCode: String(code), source: "home" };
 }
@@ -613,7 +613,7 @@ function heroHTML() {
     const f = getFood(it.foodId);
     if (!f || !it.eaten) continue;
     const g = itemG(it, f) * it.eaten;
-    segs += `<div class="seg c${ci++ % 5}" style="width:${(g / eaten) * 100}%" title="${esc(f.name)} ${fmtG(g)}g"><span>${esc(f.name)}</span></div>`;
+    segs += `<div class="seg c${ci++ % 5}" style="width:${eaten ? (g / eaten) * 100 : 0}%" title="${esc(f.name)} ${fmtG(g)}g"><span>${esc(f.name)}</span></div>`;
   }
   const left = r1(t - eaten);
   const status = !t ? `<p class="status-empty">몸무게를 입력하면 목표가 나와요</p>`
@@ -729,6 +729,7 @@ const cleanLog = (e) => {
   const out = { id: str(e.id, 20) || newId(), ...c, s: sets, done: Math.min(sets, Math.round(num(e.done, 0, 20))) };
   if (e.tw !== undefined) out.tw = e.tw === null ? null : r1(num(e.tw, 0, 500));
   if (e.tr !== undefined) out.tr = Math.round(num(e.tr, 0, 999));
+  if (e.ts !== undefined) out.ts = Math.round(num(e.ts, 0, 20));
   return out;
 };
 function syncTodayEx() {
@@ -736,10 +737,12 @@ function syncTodayEx() {
   const from = plan?.split ? plan.i : -1;
   const list = (Array.isArray(S.today.ex) ? S.today.ex : []).map(cleanLog).filter(Boolean);
   const touched = list.some((e) => e.done);
-  // 오늘 처음이거나, 아직 한 세트도 안 했는데 운동법이 바뀌었으면 운동법에서 다시 가져옴
-  if (!Array.isArray(S.today.ex) || (!touched && S.today.exFrom !== from)) {
-    S.today.ex = from >= 0 ? plan.split.ex.map((e) => ({ id: newId(), ...e, s: Math.max(1, e.s || 1), done: 0, tw: e.w, tr: e.r })) : [];
+  const sig = from >= 0 ? plan.split.ex.map((e) => `${e.n}|${e.w}|${e.r}|${e.s}`).join(";") : "";
+  // 오늘 처음이거나, 아직 한 세트도 안 했는데 운동법(분할이나 그 내용)이 바뀌었으면 운동법에서 다시 가져옴
+  if (!Array.isArray(S.today.ex) || (!touched && (S.today.exFrom !== from || S.today.exSig !== sig))) {
+    S.today.ex = from >= 0 ? plan.split.ex.map(({ lo, ...e }) => ({ id: newId(), ...e, s: Math.max(1, e.s || 1), done: 0, tw: e.w, tr: e.r, ts: e.s })) : [];
     S.today.exFrom = from;
+    S.today.exSig = sig;
     return S.today.ex;
   }
   S.today.ex = list;
@@ -747,8 +750,8 @@ function syncTodayEx() {
 }
 const logDone = (list) => (list || []).map(cleanLog).filter((e) => e && e.done)
   .map((e) => {
-    const tg = e.tr !== undefined ? { w: e.tw ?? null, r: e.tr } : progEx(e.n);   // 그날의 목표
-    return { n: e.n, w: e.w, r: e.r, s: Math.min(e.done, e.s), t: e.s, ...(tg ? { tw: tg.w ?? null, tr: tg.r } : {}) };
+    const tg = e.tr !== undefined ? { w: e.tw ?? null, r: e.tr, s: e.ts } : progEx(e.n);   // 그날의 목표
+    return { n: e.n, w: e.w, r: e.r, s: Math.min(e.done, e.s), t: e.s, ...(tg ? { tw: tg.w ?? null, tr: tg.r } : {}), ...(tg?.s ? { ts: tg.s } : {}) };
   });
 const wLabel = (w) => (w == null ? "맨몸" : `${fmtG(w)}kg`);
 
@@ -861,7 +864,9 @@ function sessionsBy() {
     for (const raw of S.history[k].ex || []) {
       const c = cleanEx(raw); if (!c || !c.s) continue;
       const x = { k, ...c, t: Math.round(num(raw.t, 0, 20)) || null };
-      if (raw.tr !== undefined) { x.tr = Math.round(num(raw.tr, 0, 999)); x.tw = raw.tw == null ? null : r1(num(raw.tw, 0, 500)); }
+      if (x.w === 0) x.w = null;   // 0kg로 적은 운동은 맨몸으로 봄
+      if (raw.tr !== undefined) { x.tr = Math.round(num(raw.tr, 0, 999)); x.tw = raw.tw == null || !num(raw.tw, 0, 500) ? null : r1(num(raw.tw, 0, 500)); }
+      if (raw.ts !== undefined) x.ts = Math.round(num(raw.ts, 0, 20)) || undefined;
       (by[c.n] ||= []).push(x);
     }
   }
@@ -886,7 +891,8 @@ function targetsOf(n) {
 }
 // 그날의 목표(세트, 개수, 무게)를 다 채웠는지. 목표가 없던 예전 기록은 세트만 봄
 function complete(x) {
-  if (!x.t || x.s < x.t) return false;
+  const need = x.ts || x.t;   // 운동법의 세트 수 (예전 기록은 그날 세트 수)
+  if (!need || x.s < need) return false;
   if (x.tr === undefined) return true;
   return x.r >= x.tr && (x.tw == null || (x.w ?? 0) >= x.tw);
 }
@@ -894,7 +900,7 @@ function complete(x) {
 function atTarget(x, tg) {
   if (!tg) return true;
   if (x.tr !== undefined) return x.tr === tg.r && (x.tw ?? null) === (tg.w ?? null);
-  return tg.w == null ? x.r >= tg.r - 1 : (x.w ?? 0) >= tg.w;   // 예전 기록
+  return tg.w == null ? x.r >= tg.r : (x.w ?? 0) >= tg.w;   // 예전 기록
 }
 const LIGHT = 20;      // 이 무게보다 가벼우면 개수부터 늘림
 const REP_RANGE = 4;   // 처음 개수 + 4회까지
@@ -974,7 +980,7 @@ function weeklyVolume() {
     let v = 0;
     days.forEach((k) => (S.history[k]?.ex || []).forEach((raw) => {
       const c = cleanEx(raw); if (!c) return;
-      const w = c.w == null ? S.weight || 0 : c.w;   // 맨몸은 몸무게로 계산
+      const w = !c.w ? S.weight || 0 : c.w;   // 맨몸(또는 0kg)은 몸무게로 계산
       v += w * c.r * c.s;
     }));
     out.push({ k: days[0], v });
@@ -1888,11 +1894,35 @@ function applyTheme(t) {
 }
 
 /* ---------- 이벤트 ---------- */
+// 바깥을 누르거나 Esc: 처음 설정 창(과 거기서 연 창)은 닫지 않음
+function dismissModal() {
+  if (!ui.modal || ui.modal.first) return;
+  ui.modal = ui.modal.back?.first ? ui.modal.back : null;
+  render();
+  if (!ui.modal && remotePending) applyRemote(remotePending);
+}
 function commit(msg, undo = false) { save(); render(); if (msg) toast(msg, undo); }
 
 $app.addEventListener("click", async (e) => {
   const b = e.target.closest("[data-act]");
   if (!b || !b.dataset.act) return;
+  if (S && !writing && !saveTimer) {
+    // 자정이 지났으면 먼저 새 하루로 (어제 기록에 잘못 들어가지 않게)
+    if (S.today.date !== dateKey()) { tick(); return; }
+    // 다른 기기에서 바뀐 내용이 기다리고 있으면 먼저 반영해서 덮어쓰지 않게 함
+    const next = remotePending && migrate(JSON.parse(JSON.stringify(remotePending)));
+    remotePending = null;
+    if (next && stable(next) !== stable(S)) {
+      S = next;
+      applyTheme(S.theme);
+      if (ensureToday()) save();
+      if (!ui.modal?.draft) {   // 화면이 바뀌었을 수 있으니 이번 누름은 쉬고 다시 그림
+        render();
+        toast("다른 기기에서 바뀐 내용을 불러왔어요");
+        return;
+      }
+    }
+  }
   const act = b.dataset.act;
   const i = Number(b.dataset.i);
   const items = S?.today.items;
@@ -1900,7 +1930,11 @@ $app.addEventListener("click", async (e) => {
   switch (act) {
     case "auth-mode": ui.authMode = b.dataset.m; ui.authError = ""; return renderAuth();
     case "reload": location.reload(); return;
-    case "logout": await flushSave(); await signOut(auth); return;
+    case "logout": {
+      if (navigator.onLine === false && (saveTimer || writing)) { toast("저장하지 않은 기록이 있어요. 인터넷에 연결된 뒤 로그아웃해 주세요."); return; }
+      await Promise.race([flushSave(), new Promise((r) => setTimeout(r, 4000))]);
+      await signOut(auth); return;
+    }
     case "theme": S.theme = S.theme === "dark" ? "light" : "dark"; applyTheme(S.theme); return commit();
     case "panel": ui.panel = ui.panel === b.dataset.p ? null : b.dataset.p; return render();
     case "close-panel": ui.panel = null; return render();
@@ -2119,7 +2153,7 @@ $app.addEventListener("click", async (e) => {
     case "lx-quick": {
       const q = quickAdds().find((x) => x.key === b.dataset.k); if (!q) return;
       syncTodayEx();
-      q.list.forEach((e) => { const tg = progExToday(e.n); S.today.ex.push({ id: newId(), n: e.n, w: e.w, r: e.r || 10, s: Math.max(1, e.s || 3), done: 0, ...(tg ? { tw: tg.w, tr: tg.r } : {}) }); });
+      q.list.forEach((e) => { const tg = progExToday(e.n); S.today.ex.push({ id: newId(), n: e.n, w: e.w, r: e.r || 10, s: Math.max(1, e.s || 3), done: 0, ...(tg ? { tw: tg.w, tr: tg.r, ts: tg.s } : {}) }); });
       return commit(`${q.list.length}개 운동을 추가했어요`);
     }
     case "lx-add": ui.lxAdd = true; render(); document.getElementById("lx-name")?.focus(); return;
@@ -2130,7 +2164,7 @@ $app.addEventListener("click", async (e) => {
       // 운동법에 같은 이름이 있으면 그 무게와 개수를 가져옴
       const ptg = progExToday(n);
       const tpl = ptg || lastOf(n);
-      S.today.ex.push({ id: newId(), n: n.slice(0, 30), w: tpl ? tpl.w : 0, r: tpl?.r || 10, s: tpl?.s || 3, done: 0, ...(ptg ? { tw: ptg.w, tr: ptg.r } : {}) });
+      S.today.ex.push({ id: newId(), n: n.slice(0, 30), w: tpl ? tpl.w : 0, r: tpl?.r || 10, s: tpl?.s || 3, done: 0, ...(ptg ? { tw: ptg.w, tr: ptg.r, ts: ptg.s } : {}) });
       ui.lxAdd = false;
       return commit();
     }
@@ -2224,7 +2258,7 @@ $app.addEventListener("click", async (e) => {
     case "cutoff-clear": { const el = document.getElementById("s-cutoff"); if (el) el.value = ""; return; }
     case "wo-del": readSettingsForm(); ui.modal.draft.workouts = ui.modal.draft.workouts.filter((w) => w.id !== b.dataset.id); return render();
     case "back-settings": ui.modal = ui.modal.back; return render();
-    case "backdrop": if (e.target === b) { ui.modal = null; render(); } return;
+    case "backdrop": if (e.target === b) dismissModal(); return;
     case "close-modal": ui.modal = null; renderPending = false; render(); if (remotePending) applyRemote(remotePending); return;
 
     case "save-settings": {
@@ -2320,7 +2354,7 @@ $app.addEventListener("input", (e) => {
   }
 });
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && ui.modal && !ui.modal.first) { ui.modal = null; render(); }
+  if (e.key === "Escape" && ui.modal) dismissModal();
   if (e.key === "Enter" && e.target.id === "lx-name") { e.preventDefault(); document.querySelector('[data-act="lx-add-save"]')?.click(); return; }
   if (e.key === "Enter" && e.target.closest(".add-form") && e.target.tagName === "INPUT") {
     e.preventDefault(); document.querySelector('[data-act="save-food"]')?.click();
@@ -2359,7 +2393,7 @@ let remotePending = null;
 function applyRemote(data) {
   if (!S || writing || saveTimer) { remotePending = data; return; }
   if (stable(data) === stable(S)) { remotePending = null; return; }
-  if (isTyping() || ui.modal?.type === "settings") { remotePending = data; return; }
+  if (isTyping() || ui.modal?.draft) { remotePending = data; return; }
   remotePending = null;
   S = migrate(data);
   applyTheme(S.theme);
