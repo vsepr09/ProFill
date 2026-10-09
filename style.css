@@ -699,7 +699,6 @@ legend { font-weight: 700; font-size: .95rem; margin-bottom: 6px; padding: 0; }
 .ex-w-box input:disabled { background: var(--surface-2); }
 .bw { flex: none; border: 1px solid var(--line); background: var(--surface); border-radius: 8px; padding: 6px 7px; font-size: .78rem; font-weight: 700; color: var(--muted); }
 .bw.on { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
-.ex-w-box:has(.bw.on) .u, .ex-w-box:has(.bw.on) input { display: none; }
 @media (max-width: 600px) {
   .wo-row { grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) 28px; }
   .wo-row .wo-n { display: none; }
@@ -711,3 +710,63 @@ legend { font-weight: 700; font-size: .95rem; margin-bottom: 6px; padding: 0; }
 @media (max-width: 600px) {
   .ex-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 28px; grid-template-areas: "n n x" "w w ." "r s ."; }
 }
+
+/* ---------- v10 ---------- */
+/* 설정: 항목마다 카드로 구분 */
+.modal-settings .form { gap: 12px; }
+.modal-settings .form > fieldset, .modal-settings .form > .row2 { border: 1px solid var(--line); background: var(--surface-2); border-radius: 14px; padding: 14px 16px; }
+.modal-settings .form > fieldset > legend { float: left; width: 100%; font-size: 1rem; font-weight: 800; margin: 0 0 10px; padding: 0 0 8px; border-bottom: 1px solid var(--line); }
+.modal-settings .form > fieldset > legend + * { clear: both; }
+.modal-settings .switch-row { padding: 8px 0; }
+.modal-settings .goal { background: var(--surface); }
+.modal-settings .danger-zone { margin-top: 0; }
+.modal-settings input, .modal-settings select { background: var(--surface); }
+
+/* 맨몸 */
+.bw-field { flex: 1; min-width: 0; display: grid; place-items: center; height: 38px; border-radius: 9px; background: var(--accent-soft); color: var(--accent); font-weight: 700; font-size: .88rem; }
+.bw { min-width: 46px; }
+
+/* 오늘 운동 */
+.wk-title { display: flex; align-items: center; gap: 10px; }
+.day-pill { font-family: var(--num); font-size: 1.15rem; font-weight: 700; background: var(--accent); color: var(--accent-ink); border-radius: 10px; padding: 3px 12px; line-height: 1.3; }
+.day-pill.rest { background: var(--surface-2); color: var(--muted); font-family: var(--font); font-size: .95rem; }
+.wk-lock { display: grid; justify-items: start; gap: 10px; background: var(--surface-2); border-radius: 12px; padding: 16px; }
+.wk-lock p { font-weight: 600; }
+.lx-wrap { margin-top: 16px; display: grid; gap: 10px; }
+.lx-wrap h3 { font-size: 1rem; }
+.lx-list { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); }
+.lx { padding: 10px 0; border-bottom: 1px solid var(--line); display: grid; gap: 8px; }
+.lx-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.lx-n { font-weight: 700; }
+.lx.done .lx-n { color: var(--muted); text-decoration: line-through; }
+.lx-spec { color: var(--muted); font-size: .86rem; }
+.lx-bot { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.lx-f { display: inline-flex !important; align-items: center; gap: 4px; font-size: .84rem; font-weight: 600; color: var(--muted); }
+.lx-f input { width: 64px; padding: 6px; text-align: center; color: var(--ink); -moz-appearance: textfield; appearance: textfield; }
+.lx-f input::-webkit-inner-spin-button, .lx-f input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+.lx-bw { display: inline-grid; place-items: center; height: 32px; padding: 0 12px; border-radius: 8px; background: var(--accent-soft); color: var(--accent); font-weight: 700; }
+.lx .dots { flex: 1; max-width: none; }
+.stepper.sm button { width: 28px; height: 30px; }
+.stepper.sm span { min-width: 44px; font-size: .84rem; }
+.lx-add { display: flex; gap: 8px; }
+.lx-add input { flex: 1; }
+
+/* 운동 분석 */
+.es-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.es-list li { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; display: grid; gap: 8px; }
+.es-top { display: flex; align-items: center; gap: 10px; }
+.es-top b { font-size: 1rem; }
+.es-top .spark { margin-left: auto; width: 90px; height: 26px; }
+.spark polyline { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.up { color: var(--ok); font-weight: 700; font-size: .82rem; }
+.down { color: var(--warn); font-weight: 700; font-size: .82rem; }
+.same { color: var(--muted); font-weight: 600; font-size: .82rem; }
+.es-grid { display: grid; grid-template-columns: 2fr 1fr 1fr 1fr; gap: 8px; }
+.es-grid span { display: grid; gap: 1px; font-size: .88rem; font-weight: 600; }
+.es-grid small { font-size: .74rem; color: var(--muted); font-weight: 600; }
+@media (max-width: 600px) {
+  .es-grid { grid-template-columns: 1fr 1fr; }
+  .lx-bot .dots { order: 3; flex-basis: 100%; }
+}
+.wk-title h2, .day-pill { white-space: nowrap; }
+.workout .sec-head { flex-wrap: wrap; row-gap: 8px; }
