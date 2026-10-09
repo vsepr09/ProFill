@@ -222,6 +222,7 @@ async function syncPublic() {
 }
 
 // 자정이 지났으면 새 하루로 바꿈
+let autoMsg = "";
 function ensureToday() {
   const k = dateKey();
   if (S.today.date === k) return false;
@@ -246,6 +247,8 @@ function ensureToday() {
     items = S.lastItems.map((i) => ({ ...slim(i), eaten: 0 }));
   }
   S.today = { date: k, items, parts: [] };   // ex는 운동법에서 새로 가져옴
+  const up = autoProgress();
+  if (up.length) autoMsg = `운동법을 올렸어요: ${up.join(", ")}`;
   return true;
 }
 
@@ -340,14 +343,22 @@ function mealFood(code) {
   if (!m || m.protein == null) return null;
   return { id: `meal:${code}`, name: `급식 ${MEAL_NAMES[code]}`, serving: "1끼", protein: m.protein, kind: "meal", mealCode: String(code), source: "meal" };
 }
+// 그날 급식 정보가 없는 끼니는 집밥으로 (단백질은 직접 조절)
+const HOME_G = 20;
+function homeFood(code) {
+  if (!mealsLoaded || todayMeals()[code]) return null;
+  const g = num(S.homeG?.[code] ?? HOME_G, 0, 200);
+  return { id: `home:${code}`, name: MEAL_NAMES[code], serving: "1끼", protein: r1(g), kind: "meal", mealCode: String(code), source: "home" };
+}
 function allFoods() {
   return [
-    ...["1", "2", "3"].map(mealFood).filter(Boolean),
+    ...["1", "2", "3"].map((c) => mealFood(c) || homeFood(c)).filter(Boolean),
     ...S.customFoods.map((f) => ({ ...f, source: "custom" })),
   ];
 }
 function getFood(id) {
   if (id.startsWith("meal:")) return mealFood(id.slice(5));
+  if (id.startsWith("home:")) return homeFood(id.slice(5));
   const c = S.customFoods.find((f) => f.id === id);
   return c ? { ...c, source: "custom" } : null;
 }
@@ -553,7 +564,11 @@ function heroHTML() {
     segs += `<div class="seg c${ci++ % 5}" style="width:${(g / eaten) * 100}%" title="${esc(f.name)} ${fmtG(g)}g"><span>${esc(f.name)}</span></div>`;
   }
   const left = r1(t - eaten);
-  const status = !t ? "몸무게를 입력하면 목표가 나와요" : left > 0 ? `${fmtG(left)}g 남았어요` : "오늘 목표를 채웠어요";
+  const pctDone = t ? Math.min(999, Math.round((eaten / t) * 100)) : 0;
+  const status = !t ? `<p class="status-empty">몸무게를 입력하면 목표가 나와요</p>`
+    : left > 0
+      ? `<div class="remain"><span class="rm-label">남은 양</span><span class="rm-num">${fmtG(left)}<small>g</small></span><span class="rm-pct"><i style="width:${Math.min(100, pctDone)}%"></i></span><span class="rm-sub">${pctDone}% 채움</span></div>`
+      : `<div class="remain done"><span class="rm-label">오늘 목표</span><span class="rm-num">달성<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.2 4.2L19 7" /></svg></span><span class="rm-sub">${pctDone}% 채움${eaten > t ? ` · +${fmtG(eaten - t)}g` : ""}</span></div>`;
   const step = max > 300 ? 100 : 50;
   let labels = "";
   for (let g = step; g < max; g += step) labels += `<span style="left:${pct(g)}%">${g}</span>`;
@@ -561,7 +576,7 @@ function heroHTML() {
     <div class="hero-head">
       <div class="big"><span class="num">${fmtG(eaten)}</span><span class="of">/ ${t || "–"}g</span></div>
       <div class="hero-meta">
-        <p class="status ${t && left <= 0 ? "done" : ""}">${status}</p>
+        ${status}
       </div>
       <div class="hero-side">${streakHTML()}${weekHTML()}</div>
     </div>
@@ -671,7 +686,7 @@ function syncTodayEx() {
   return list;
 }
 const logDone = (list) => (list || []).map(cleanLog).filter((e) => e && e.done)
-  .map((e) => ({ n: e.n, w: e.w, r: e.r, s: Math.min(e.done, e.s) }));
+  .map((e) => ({ n: e.n, w: e.w, r: e.r, s: Math.min(e.done, e.s), t: e.s }));
 const wLabel = (w) => (w == null ? "맨몸" : `${fmtG(w)}kg`);
 
 function exLogRowHTML(e, j, yday) {
@@ -725,53 +740,153 @@ function workoutHTML() {
     ${exLogHTML()}`;
 }
 
-/* ---------- 운동 분석 ---------- */
-function exStats() {
-  recordToday();
+/* ---------- 운동 분석: 성장과 점진적 과부하 ---------- */
+const W_STEP = 2.5;                                    // 무게 올릴 때 단위 (kg)
+const e1rm = (w, r) => (w > 0 && r > 0 ? w * (1 + Math.min(r, 15) / 30) : 0);   // Epley 추정 1RM
+const round25 = (v) => Math.max(0, Math.round(v / W_STEP) * W_STEP);
+// 날짜순 운동 기록: { k, n, w, r, s 한 세트, t 계획 세트 }
+function sessionsBy() {
   const by = {};
   for (const k of Object.keys(S.history).sort()) {
-    for (const e of S.history[k].ex || []) {
-      const c = cleanEx(e); if (!c || !c.s) continue;
-      (by[c.n] ||= []).push({ k, ...c });
+    for (const raw of S.history[k].ex || []) {
+      const c = cleanEx(raw); if (!c || !c.s) continue;
+      (by[c.n] ||= []).push({ k, ...c, t: Math.round(num(raw.t, 0, 20)) || null });
     }
   }
+  return by;
+}
+const progEx = (n) => cleanProgram(S.program)?.splits.flatMap((sp) => sp.ex).find((x) => x.n === n) || null;
+// 계획한 세트와 개수, 무게를 다 채웠는지
+function complete(x, tg) {
+  if (!x.t || x.s < x.t) return false;
+  if (!tg) return true;
+  return x.r >= tg.r && (tg.w == null || (x.w ?? 0) >= tg.w);
+}
+// 다음 목표: 두 번 연속 다 채우면 올리고, 세 번 연속 못 채우면 10% 내리기
+function overload(n, ss) {
+  const tg = progEx(n);
+  const last = ss[ss.length - 1];
+  const base = tg || { w: last.w, r: last.r, s: last.t || last.s };
+  const bw = base.w == null;
+  const recent = ss.slice(-3);
+  const ok = recent.map((x) => complete(x, tg));
+  if (ok.length >= 2 && ok[ok.length - 1] && ok[ok.length - 2]) {
+    return bw ? { kind: "up", w: null, r: base.r + 1, s: base.s, why: "두 번 연속 목표를 채웠어요" }
+      : { kind: "up", w: round25((base.w || 0) + W_STEP), r: base.r, s: base.s, why: "두 번 연속 목표를 채웠어요" };
+  }
+  if (ok.length === 3 && !ok.some(Boolean)) {
+    return bw ? { kind: "down", w: null, r: Math.max(1, base.r - 2), s: base.s, why: "세 번 연속 목표에 못 미쳤어요" }
+      : { kind: "down", w: round25((base.w || 0) * 0.9), r: base.r, s: base.s, why: "세 번 연속 목표에 못 미쳤어요" };
+  }
+  if (ok[ok.length - 1]) return { kind: "near", ...base, why: "한 번 더 채우면 올려요" };
+  return { kind: "hold", ...base, why: "이번 목표를 먼저 채워요" };
+}
+function exStats() {
+  recordToday();
+  const by = sessionsBy();
+  const today = keyToUTC(S.today.date);
   return Object.entries(by).map(([n, ss]) => {
     const bw = ss[ss.length - 1].w == null;
-    const val = (x) => (bw ? x.r : x.w ?? 0);          // 맨몸이면 개수, 아니면 무게로 비교
-    const last = ss[ss.length - 1], prev = ss[ss.length - 2];
-    return { n, ss, bw, last, best: Math.max(...ss.map(val)), diff: prev ? val(last) - val(prev) : null,
-      vol: ss.filter((x) => keyToUTC(x.k) > keyToUTC(S.today.date) - 7 * 864e5).reduce((a, x) => a + x.s, 0) };
+    const metric = (x) => (bw ? x.r * x.s : e1rm(x.w, x.r));          // 맨몸은 총 개수, 무게는 추정 1RM
+    const last = ss[ss.length - 1];
+    const base = ss.find((x) => keyToUTC(x.k) >= today - 28 * 864e5) || ss[0];
+    const m0 = metric(base), m1 = metric(last);
+    const change = ss.length > 1 && m0 ? (m1 - m0) / m0 : null;
+    let best = 0, prs = 0;
+    ss.forEach((x) => { const m = metric(x); if (m > best) { if (best && keyToUTC(x.k) >= today - 30 * 864e5) prs++; best = m; } });
+    const status = ss.length < 2 ? "new" : change > 0.02 ? "up" : change < -0.02 ? "down" : "flat";
+    return { n, ss, bw, last, best, m1, change, prs, status, next: overload(n, ss) };
   }).sort((a, b) => (a.last.k < b.last.k ? 1 : a.last.k > b.last.k ? -1 : a.n.localeCompare(b.n)));
+}
+// 주별 볼륨 (무게 × 개수 × 세트, 최근 6주)
+function weeklyVolume() {
+  const out = [];
+  for (let w = -5; w <= 0; w++) {
+    const days = weekRange(w);
+    let v = 0;
+    days.forEach((k) => (S.history[k]?.ex || []).forEach((raw) => { const c = cleanEx(raw); if (c && c.w) v += c.w * c.r * c.s; }));
+    out.push({ k: days[0], v });
+  }
+  return out;
 }
 function sparkSVG(vals) {
   if (vals.length < 2) return "";
-  const W = 90, H = 26, lo = Math.min(...vals), hi = Math.max(...vals), span = hi - lo || 1;
-  const pts = vals.map((v, i) => `${(i / (vals.length - 1)) * W},${H - 3 - ((v - lo) / span) * (H - 6)}`).join(" ");
-  return `<svg class="spark" viewBox="0 0 ${W} ${H}" aria-hidden="true"><polyline points="${pts}"/></svg>`;
+  const W = 120, H = 34, lo = Math.min(...vals), hi = Math.max(...vals), span = hi - lo || 1;
+  const xy = vals.map((v, i) => [(i / (vals.length - 1)) * (W - 6) + 3, H - 4 - ((v - lo) / span) * (H - 8)]);
+  return `<svg class="spark" viewBox="0 0 ${W} ${H}" aria-hidden="true"><polyline points="${xy.map((p) => p.join(",")).join(" ")}"/>${xy.map(([x, y], i) => `<circle cx="${x}" cy="${y}" r="${i === xy.length - 1 ? 3 : 1.8}"/>`).join("")}</svg>`;
 }
+function volBarsHTML(wv) {
+  const max = Math.max(...wv.map((x) => x.v), 1);
+  return `<div class="vol-bars">${wv.map((x, i) => {
+    const d = new Date(keyToUTC(x.k));
+    return `<span class="vb ${i === wv.length - 1 ? "now" : ""}"><span class="vb-col"><i style="height:${Math.round((x.v / max) * 100)}%"></i></span><b>${i === wv.length - 1 ? "이번 주" : `${d.getUTCMonth() + 1}/${d.getUTCDate()}`}</b></span>`;
+  }).join("")}</div>`;
+}
+const fmtVol = (v) => (v >= 10000 ? `${fmtG(v / 1000)}t` : `${Math.round(v).toLocaleString()}kg`);
+const STATUS = { up: ["성장 중", "up"], flat: ["정체", "flat"], down: ["하락", "down"], new: ["새 운동", "new"] };
+const NEXT = { up: "증량", down: "감량", near: "유지", hold: "유지" };
+
 function exStatsHTML() {
   const list = exStats();
   const close = `<div class="modal-actions"><button class="btn primary" data-act="close-modal">닫기</button></div>`;
-  if (!list.length) return `<h2>운동 분석</h2><p class="muted">아직 기록한 세트가 없어요.</p>${close}`;
-  const unit = (x) => (x.bw ? "회" : "kg");
-  const rows = list.map((x) => {
+  const auto = `<label class="switch-row es-auto"><span><b>운동법 자동으로 올리기</b><small>두 번 연속 목표를 채우면 다음 날 무게(맨몸은 개수)를 올려요</small></span>
+      <input type="checkbox" role="switch" class="switch" id="s-auto" ${S.autoProgress ? "checked" : ""}></label>`;
+  if (!list.length) return `<h2>운동 분석</h2>${auto}<p class="muted">아직 기록한 세트가 없어요.</p>${close}`;
+  const wv = weeklyVolume();
+  const cur = wv[wv.length - 1].v, prev = wv[wv.length - 2].v;
+  const volChg = prev ? Math.round(((cur - prev) / prev) * 100) : null;
+  const growing = list.filter((x) => x.status === "up").length;
+  const prs = list.reduce((a, x) => a + x.prs, 0);
+  const pct = (c) => `${c > 0 ? "▲" : c < 0 ? "▼" : ""}${Math.abs(Math.round(c * 100))}%`;
+  const cards = list.map((x) => {
+    const [label, cls] = STATUS[x.status];
     const d = new Date(keyToUTC(x.last.k));
-    const recent = x.ss.slice(-8);
-    const dir = x.diff == null ? "" : x.diff > 0 ? `<span class="up">▲${fmtG(x.diff)}${unit(x)}</span>` : x.diff < 0 ? `<span class="down">▼${fmtG(-x.diff)}${unit(x)}</span>` : `<span class="same">유지</span>`;
+    const series = x.ss.slice(-10).map((s) => (x.bw ? s.r * s.s : e1rm(s.w, s.r)));
+    const nx = x.next;
+    const tg = progEx(x.n);
+    const same = tg && tg.w === nx.w && tg.r === nx.r && tg.s === nx.s;
     return `<li>
-      <div class="es-top"><b>${esc(x.n)}</b>${dir}${sparkSVG(recent.map((s) => (x.bw ? s.r : s.w ?? 0)))}</div>
-      <div class="es-grid">
-        <span><small>최근 (${d.getUTCMonth() + 1}/${d.getUTCDate()})</small>${wLabel(x.last.w)} · ${x.last.r}회 · ${x.last.s}세트</span>
-        <span><small>최고</small>${fmtG(x.best)}${unit(x)}</span>
-        <span><small>7일 세트</small>${x.vol}세트</span>
-        <span><small>기록</small>${x.ss.length}번</span>
+      <div class="es-top"><b>${esc(x.n)}</b><span class="badge-s ${cls}">${label}</span>${x.change != null ? `<span class="es-chg ${x.change > 0 ? "up" : x.change < 0 ? "down" : ""}">${pct(x.change)}</span>` : ""}</div>
+      <div class="es-mid">
+        <div class="es-big"><small>${x.bw ? "총 개수" : "추정 1RM"}</small><b>${x.bw ? `${Math.round(x.m1)}회` : `${fmtG(r1(x.m1))}kg`}</b></div>
+        ${sparkSVG(series)}
+      </div>
+      <p class="es-last">${d.getUTCMonth() + 1}/${d.getUTCDate()} · ${wLabel(x.last.w)} · ${x.last.r}회 · ${x.last.s}${x.last.t ? `/${x.last.t}` : ""}세트</p>
+      <div class="es-next ${nx.kind}">
+        <div><small>다음 목표 · ${NEXT[nx.kind]}</small><b>${wLabel(nx.w)} · ${nx.r}회 · ${nx.s}세트</b><span>${nx.why}</span></div>
+        ${tg && !same && (nx.kind === "up" || nx.kind === "down") ? `<button class="btn small" data-act="apply-next" data-n="${esc(x.n)}">운동법에 반영</button>` : ""}
       </div></li>`;
   }).join("");
-  return `<h2>운동 분석</h2><ul class="es-list">${rows}</ul>${close}`;
+  return `<h2>운동 분석</h2>
+    <div class="cal-stats">
+      <div><span>이번 주 볼륨</span><b>${fmtVol(cur)}</b><small>${!prev ? "지난주 기록 없음" : cur ? `지난주보다 ${pct(volChg / 100)}` : `지난주 ${fmtVol(prev)}`}</small></div>
+      <div><span>성장 중</span><b>${growing}/${list.length}</b><small>최근 4주 기준</small></div>
+      <div><span>최고 기록 경신</span><b>${prs}번</b><small>최근 30일</small></div>
+    </div>
+    <h3 class="es-h">주별 볼륨</h3>${volBarsHTML(wv)}
+    ${auto}
+    <ul class="es-list">${cards}</ul>${close}`;
+}
+// 운동법에 다음 목표 반영
+function applyNext(n, nx) {
+  const prog = cleanProgram(S.program); if (!prog) return false;
+  let hit = false;
+  prog.splits.forEach((sp) => sp.ex.forEach((e) => { if (e.n === n) { e.w = nx.w; e.r = nx.r; e.s = nx.s; hit = true; } }));
+  if (hit) S.program = prog;
+  return hit;
+}
+// 자동으로 올리기: 증량만 자동으로
+function autoProgress() {
+  if (!S.autoProgress || !cleanProgram(S.program)) return [];
+  const by = sessionsBy(), done = [];
+  for (const [n, ss] of Object.entries(by)) {
+    if (!progEx(n)) continue;
+    const nx = overload(n, ss);
+    if (nx.kind === "up" && applyNext(n, nx)) done.push(`${n} ${wLabel(nx.w)} × ${nx.r}회`);
+  }
+  return done;
 }
 
-/* 나의 운동법 편집 */
-const newEx = () => ({ n: "", w: "", r: 10, s: 3 });
 function programDraft() {
   const p = cleanProgram(S.program);
   if (p) return JSON.parse(JSON.stringify(p));
@@ -1013,7 +1128,7 @@ function ydayHTML() {
 // 오늘 밤 먹을 것은 추천을 꺼도 보여 줌. 추천은 담은 식품이 있을 때만
 function planBlockHTML() {
   const night = nightHTML();
-  const showPlan = S.showPlan !== false && S.today.items.length;
+  const showPlan = S.showPlan !== false;
   if (!night && !showPlan) return `<div id="plan" hidden></div>`;
   return `<section class="block plan ${showPlan ? "" : "night-only"}" id="plan">${night}${showPlan ? planHTML() : ""}</section>`;
 }
@@ -1022,11 +1137,12 @@ function planHTML() {
   const { planned } = totals();
   const p = buildPlan();
   let body;
-  if (!p.shown.length) body = `<p class="empty">${p.leftover ? "오늘 남은 시간이 없어요." : "다 먹었어요."}</p>`;
+  if (!S.today.items.length) body = "";
+  else if (!p.shown.length) body = `<p class="empty">${p.leftover ? "오늘 남은 시간이 없어요." : "다 먹었어요."}</p>`;
   else body = `<ol class="timeline">${p.shown.map((s) => slotHTML(s, s === p.next)).join("")}</ol>`;
 
   let summary = "";
-  if (t && S.today.items.length) {
+  if (t) {
     const gap = r1(t - planned);
     if (gap > 0) {
       const sug = suggest(gap);
@@ -1085,7 +1201,7 @@ function checklistHTML() {
 
 function foodsHTML() {
   const tabs = [["all", "전체"], ["meal", "급식"], ["custom", "내 식품"]];
-  return `<div class="sec-head"><h2>단백질 식품 목록</h2><button class="btn ${ui.addOpen ? "ghost" : "primary"}" data-act="toggle-add">${ui.addOpen ? "닫기" : "직접 추가"}</button></div>
+  return `<div class="sec-head"><h2>식품 목록</h2><button class="btn ${ui.addOpen ? "ghost" : "primary"}" data-act="toggle-add">${ui.addOpen ? "닫기" : "직접 추가"}</button></div>
     ${ui.addOpen ? addFormHTML() : ""}
     <div class="filters">
       <input type="search" id="foodSearch" placeholder="식품 이름으로 찾기" value="${esc(ui.query)}" aria-label="식품 검색">
@@ -1096,9 +1212,9 @@ function foodsHTML() {
 
 function foodRowsHTML() {
   const q = ui.query.trim().toLowerCase().replace(/\s+/g, "");
-  const list = allFoods().filter((f) => ui.filter === "all" || f.source === ui.filter)
+  const list = allFoods().filter((f) => ui.filter === "all" || f.source === ui.filter || (ui.filter === "meal" && f.source === "home"))
     .filter((f) => !q || f.name.toLowerCase().replace(/\s+/g, "").includes(q))
-    .map((f, i) => ({ f, i, sc: f.source === "meal" ? 99 : recentScore(f.id) }))
+    .map((f, i) => ({ f, i, sc: f.kind === "meal" ? 99 : recentScore(f.id) }))
     .sort((a, b) => b.sc - a.sc || a.i - b.i)
     .map((x) => x.f);
   if (!list.length) {
@@ -1109,17 +1225,17 @@ function foodRowsHTML() {
   }
   return list.map((f) => {
     const inList = S.today.items.find((i) => i.foodId === f.id);
-    const often = f.source !== "meal" && recentScore(f.id) >= 2 ? `<span class="tag often">자주 먹음</span>` : "";
+    const often = f.kind !== "meal" && recentScore(f.id) >= 2 ? `<span class="tag often">자주 먹음</span>` : "";
     const tag = often;
     const kind = f.kind === "fast" ? `<span class="tag soft">빠른 흡수</span>` : f.kind === "slow" ? `<span class="tag soft">천천히 흡수</span>` : "";
     const btn = f.kind === "meal" && inList
       ? `<button class="btn add in" disabled>담김</button>`
       : `<button class="btn add ${inList ? "in" : ""}" data-act="add-food" data-id="${esc(f.id)}" data-n="1" aria-label="${esc(f.name)} 담기">${inList ? `담김 ${inList.qty}` : "담기"}</button>`;
     return `<li class="food">
-      <div class="food-main"><span class="food-name">${esc(f.name)}</span>${tag}${kind}<span class="food-meta">${esc(f.serving)}</span></div>
+      <div class="food-main"><span class="food-name">${esc(f.name)}</span>${f.source === "home" ? `<span class="tag soft">집밥</span>` : ""}${tag}${kind}<span class="food-meta">${esc(f.serving)}</span></div>
       ${f.source === "custom" ? `<span class="food-edit"><button class="link" data-act="edit-food" data-id="${esc(f.id)}">수정</button><button class="link danger" data-act="del-food" data-id="${esc(f.id)}">삭제</button></span>`
         : `<span class="food-edit"></span>`}
-      <span class="food-g">${fmtG(f.protein)}g</span>
+      ${f.source === "home" ? `<label class="home-g"><input class="hg" data-c="${f.mealCode}" type="number" inputmode="decimal" min="0" max="200" step="1" value="${fmtG(f.protein)}" aria-label="${f.name} 단백질"><span>g</span></label>` : `<span class="food-g">${fmtG(f.protein)}g</span>`}
       ${btn}
     </li>`;
   }).join("");
@@ -1789,6 +1905,13 @@ $app.addEventListener("click", async (e) => {
       return commit();
     }
     case "go-add": ui.addOpen = true; ui.editingFood = null; render(); document.getElementById("af-name")?.scrollIntoView({ block: "center" }); document.getElementById("af-name")?.focus(); return;
+    case "apply-next": {
+      const n = b.dataset.n;
+      const x = exStats().find((y) => y.n === n); if (!x) return;
+      snapshot();
+      if (applyNext(n, x.next)) return commit(`${n}: ${wLabel(x.next.w)} × ${x.next.r}회 × ${x.next.s}세트로 바꿨어요`, true);
+      return;
+    }
     case "open-exstats": ui.modal = { type: "exstats" }; return render();
     case "part": {
       const p = b.dataset.p; if (!PARTS.includes(p)) return;
@@ -1942,6 +2065,15 @@ $app.addEventListener("change", (e) => {
 });
 $app.addEventListener("change", (e) => {
   const t = e.target;
+  if (t.id === "s-auto") {
+    S.autoProgress = t.checked;
+    const up = autoProgress();
+    return commit(up.length ? `운동법을 올렸어요: ${up.join(", ")}` : t.checked ? "자동으로 올리기를 켰어요" : "자동으로 올리기를 껐어요");
+  }
+  if (t.classList.contains("hg")) {
+    S.homeG = { ...(S.homeG || {}), [t.dataset.c]: r1(num(t.value, 0, 200)) };
+    return commit();
+  }
   if (!t.classList.contains("lx-w") && !t.classList.contains("lx-r")) return;
   const ex = S?.today.ex?.[Number(t.dataset.j)]; if (!ex) return;
   if (t.classList.contains("lx-w")) ex.w = r1(num(t.value, 0, 500));
@@ -1976,7 +2108,7 @@ function tick() {
   if (renderPending) softRender();
   if (ensureToday()) {
     save(); loadMeals(); render(); watchFriends();
-    toast("새로운 하루예요. 체크리스트를 새로 시작했어요.");
+    toast(autoMsg || "새로운 하루예요. 체크리스트를 새로 시작했어요."); autoMsg = "";
     return;
   }
   const plan = document.getElementById("plan");
@@ -2031,6 +2163,7 @@ onAuthStateChanged(auth, async (user) => {
     if (ensureToday() || isNew) save();
     if (!S.weight) ui.modal = { type: "settings", first: true, draft: settingsDraft() };
     render();
+    if (autoMsg) { setTimeout(() => toast(autoMsg), 400); setTimeout(() => { autoMsg = ""; }, 500); }
     watchFriends();
     unsubUser = onSnapshot(doc(db, "users", uid), (sn) => {
       if (!sn.exists() || sn.metadata.hasPendingWrites || sn.metadata.fromCache) return;
