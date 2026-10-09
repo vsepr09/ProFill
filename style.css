@@ -829,3 +829,7 @@ legend { font-weight: 700; font-size: .95rem; margin-bottom: 6px; padding: 0; }
   .es-next .btn { align-self: flex-start; }
   .spark { width: 96px; }
 }
+.remain { border-left: 0; padding: 4px 0 6px 18px; min-width: 0; }
+.lx-quick { display: flex; flex-wrap: wrap; gap: 8px; }
+.lx-quick .chip span { color: var(--accent); }
+.ghost-chip { border-style: dashed; color: var(--muted); }

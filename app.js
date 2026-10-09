@@ -564,11 +564,10 @@ function heroHTML() {
     segs += `<div class="seg c${ci++ % 5}" style="width:${(g / eaten) * 100}%" title="${esc(f.name)} ${fmtG(g)}g"><span>${esc(f.name)}</span></div>`;
   }
   const left = r1(t - eaten);
-  const pctDone = t ? Math.min(999, Math.round((eaten / t) * 100)) : 0;
   const status = !t ? `<p class="status-empty">몸무게를 입력하면 목표가 나와요</p>`
     : left > 0
-      ? `<div class="remain"><span class="rm-label">남은 양</span><span class="rm-num">${fmtG(left)}<small>g</small></span><span class="rm-pct"><i style="width:${Math.min(100, pctDone)}%"></i></span><span class="rm-sub">${pctDone}% 채움</span></div>`
-      : `<div class="remain done"><span class="rm-label">오늘 목표</span><span class="rm-num">달성<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.2 4.2L19 7" /></svg></span><span class="rm-sub">${pctDone}% 채움${eaten > t ? ` · +${fmtG(eaten - t)}g` : ""}</span></div>`;
+      ? `<div class="remain"><span class="rm-label">남은 양</span><span class="rm-num">${fmtG(left)}<small>g</small></span></div>`
+      : `<div class="remain done"><span class="rm-label">오늘 목표</span><span class="rm-num">달성<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.2 4.2L19 7" /></svg></span></div>`;
   const step = max > 300 ? 100 : 50;
   let labels = "";
   for (let g = step; g < max; g += step) labels += `<span style="left:${pct(g)}%">${g}</span>`;
@@ -706,11 +705,60 @@ function exLogRowHTML(e, j, yday) {
       <div class="stepper sm"><button data-act="lx-sets" data-j="${j}" data-d="-1" aria-label="세트 줄이기">−</button><span>${e.s}세트</span><button data-act="lx-sets" data-j="${j}" data-d="1" aria-label="세트 늘리기">+</button></div>
     </div></li>`;
 }
+// 운동 이름별 가장 최근 기록 (무게, 개수, 계획 세트)
+function lastOf(n) {
+  const keys = Object.keys(S.history).filter((k) => k < S.today.date).sort().reverse();
+  for (const k of keys) {
+    const raw = (S.history[k].ex || []).find((x) => x.n === n);
+    if (raw) { const c = cleanEx(raw); if (c) return { ...c, s: Math.round(num(raw.t, 0, 20)) || c.s || 3 }; }
+  }
+  return null;
+}
+// 한 번에 담을 수 있는 묶음: 오늘 운동법, 다른 분할, 오늘 체크한 부위를 최근에 했던 운동
+function quickAdds() {
+  const have = new Set((S.today.ex || []).map((e) => e.n));
+  const prog = cleanProgram(S.program);
+  const plan = todayPlan();
+  const out = [];
+  const push = (key, label, list) => {
+    const fresh = list.filter((e) => !have.has(e.n));
+    if (fresh.length) out.push({ key, label, list: fresh });
+  };
+  if (prog) {
+    const order = plan?.split ? [plan.i, ...prog.splits.map((_, i) => i).filter((i) => i !== plan.i)] : prog.splits.map((_, i) => i);
+    order.forEach((i) => push(`split:${i}`, i === plan?.i ? "운동법대로" : `${i + 1}일차 운동`, prog.splits[i].ex));
+  }
+  const keys = Object.keys(S.history).filter((k) => k < S.today.date).sort().reverse();
+  for (const p of todayParts()) {
+    const k = keys.find((x) => (S.history[x].parts || []).includes(p) && (S.history[x].ex || []).length);
+    if (!k) continue;
+    // 그날 운동 중 이 부위에 해당하는 것 (운동법에 부위가 있으면 그걸로 고름)
+    const inPart = (n) => !prog || !prog.splits.some((sp) => sp.ex.some((e) => e.n === n)) || prog.splits.some((sp) => sp.parts.includes(p) && sp.ex.some((e) => e.n === n));
+    const list = (S.history[k].ex || []).map((raw) => { const c = cleanEx(raw); return c && { ...c, s: Math.round(num(raw.t, 0, 20)) || c.s || 3 }; }).filter((c) => c && inPart(c.n));
+    const d = new Date(keyToUTC(k));
+    push(`part:${p}`, `최근 ${p} (${d.getUTCMonth() + 1}/${d.getUTCDate()})`, list);
+  }
+  // 바로 전 운동한 날 그대로
+  const lastK = keys.find((x) => (S.history[x].ex || []).length);
+  if (lastK) {
+    const d = new Date(keyToUTC(lastK));
+    push("last", `지난번 그대로 (${d.getUTCMonth() + 1}/${d.getUTCDate()})`, S.history[lastK].ex.map((raw) => { const c = cleanEx(raw); return c && { ...c, s: Math.round(num(raw.t, 0, 20)) || c.s || 3 }; }).filter(Boolean));
+  }
+  const seen = new Set();
+  return out.filter((o) => { const sig = o.list.map((e) => e.n).sort().join("|"); if (seen.has(sig)) return false; seen.add(sig); return true; }).slice(0, 4);
+}
+function knownExNames() {
+  const names = new Set();
+  cleanProgram(S.program)?.splits.forEach((sp) => sp.ex.forEach((e) => names.add(e.n)));
+  Object.values(S.history).forEach((h) => (h.ex || []).forEach((e) => e?.n && names.add(String(e.n).slice(0, 30))));
+  return [...names].sort();
+}
 function exLogHTML() {
   const list = syncTodayEx();
+  const quick = quickAdds();
   const add = ui.lxAdd
-    ? `<div class="lx-add"><input id="lx-name" maxlength="30" placeholder="운동 이름" aria-label="운동 이름"><button class="btn primary small" data-act="lx-add-save">추가</button><button class="btn ghost small" data-act="lx-add-cancel">취소</button></div>`
-    : `<button class="btn ghost small left" data-act="lx-add">운동 추가</button>`;
+    ? `<div class="lx-add"><input id="lx-name" maxlength="30" list="lx-names" placeholder="운동 이름" aria-label="운동 이름"><datalist id="lx-names">${knownExNames().map((n) => `<option value="${esc(n)}">`).join("")}</datalist><button class="btn primary small" data-act="lx-add-save">추가</button><button class="btn ghost small" data-act="lx-add-cancel">취소</button></div>`
+    : `<div class="lx-quick">${quick.map((q) => `<button class="chip" data-act="lx-quick" data-k="${esc(q.key)}" title="${esc(q.list.map((e) => e.n).join(", "))}">${esc(q.label)} <span>+${q.list.length}</span></button>`).join("")}<button class="chip ghost-chip" data-act="lx-add">직접 추가</button></div>`;
   return `<div class="lx-wrap"><h3>오늘 한 운동</h3>${list.length ? `<ul class="lx-list">${list.map((e, j) => exLogRowHTML(e, j)).join("")}</ul>` : ""}${add}</div>`;
 }
 
@@ -1893,13 +1941,19 @@ $app.addEventListener("click", async (e) => {
       snapshot(); const n = S.today.ex[j].n; S.today.ex.splice(j, 1);
       return commit(`${eul(n)} 뺐어요`, true);
     }
+    case "lx-quick": {
+      const q = quickAdds().find((x) => x.key === b.dataset.k); if (!q) return;
+      syncTodayEx();
+      q.list.forEach((e) => S.today.ex.push({ id: newId(), n: e.n, w: e.w, r: e.r || 10, s: Math.max(1, e.s || 3), done: 0 }));
+      return commit(`${q.list.length}개 운동을 추가했어요`);
+    }
     case "lx-add": ui.lxAdd = true; render(); document.getElementById("lx-name")?.focus(); return;
     case "lx-add-cancel": ui.lxAdd = false; return render();
     case "lx-add-save": {
       const n = val("lx-name").trim(); if (!n) return;
       syncTodayEx();
       // 운동법에 같은 이름이 있으면 그 무게와 개수를 가져옴
-      const tpl = cleanProgram(S.program)?.splits.flatMap((sp) => sp.ex).find((x) => x.n === n);
+      const tpl = progEx(n) || lastOf(n);
       S.today.ex.push({ id: newId(), n: n.slice(0, 30), w: tpl ? tpl.w : 0, r: tpl?.r || 10, s: tpl?.s || 3, done: 0 });
       ui.lxAdd = false;
       return commit();
