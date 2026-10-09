@@ -501,11 +501,39 @@ input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1
 @media (max-width: 860px) {
   .side { display: contents; position: static; max-height: none; overflow: visible; }
 }
-.fd-profile { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
-.fd-profile div { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; display: grid; gap: 2px; align-content: start; }
-.fd-profile span { font-size: .8rem; color: var(--muted); font-weight: 600; }
-.fd-profile b { font-size: 1.1rem; }
-.fd-profile small { font-size: .78rem; color: var(--accent); font-weight: 600; }
+.fd-profile { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.fd-profile div { background: var(--surface-2); border-radius: 12px; padding: 10px 12px; display: grid; gap: 2px; align-content: start; min-width: 0; }
+.fd-profile span { font-size: .78rem; color: var(--muted); font-weight: 600; }
+.fd-profile b { font-size: 1.08rem; overflow-wrap: anywhere; }
+.fd-profile small { font-size: .74rem; color: var(--accent); font-weight: 600; }
+
+/* 자세한 정보: 항목마다 카드로 구분 */
+.fd-sec { border: 1px solid var(--line); border-radius: 16px; padding: 16px; display: grid; gap: 12px; }
+.fd-sec-t { font-size: 1.02rem; font-weight: 750; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+.fd-sec .cal-foods { margin: 0; }
+.fd-sec .cal-foods li:last-child { border-bottom: 0; }
+.fd-sec .cal-parts { margin: 0; }
+.fd-sec .ex-list { margin: 0; }
+.fd-sec .pv { gap: 14px; }
+.fd-sec .pv-splits > li { border: 0; padding: 0; gap: 8px; }
+.fd-sec .pv-splits { gap: 16px; }
+
+/* 운동 분석 요약 */
+.an-groups { display: grid; gap: 8px; }
+.an-groups .pv-split-t { margin-top: 6px; }
+.an-list { list-style: none; margin: 0; padding: 0; background: var(--surface-2); border-radius: 10px; }
+.an-list li { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+.an-list li:last-child { border-bottom: 0; }
+.an-n { display: grid; gap: 1px; min-width: 0; }
+.an-n b { font-size: .92rem; }
+.an-n small { font-size: .76rem; color: var(--muted); }
+.an-r { display: inline-flex; align-items: center; gap: 8px; flex: none; }
+.an-r .es-chg { margin-left: 0; font-size: .92rem; }
+
+/* 운동 분석: 부위별 묶음 */
+.es-group { display: grid; gap: 10px; }
+.es-gh { display: flex; align-items: center; gap: 8px; font-size: 1rem; font-weight: 750; margin-top: 6px; }
+.es-gh::before { content: ""; width: 4px; height: 18px; border-radius: 2px; background: var(--accent); }
 
 /* ---------- v5: 급식 칸 한눈에, 친구는 bar 아래 한 줄 ---------- */
 .side { max-height: none; overflow: visible; }
@@ -859,3 +887,19 @@ select { -webkit-appearance: none; appearance: none; min-height: 42px; padding-r
   .fs-name { max-width: 9em; }
 }
 .ex-row .x { width: 28px; }
+
+/* 좁은 화면 머리줄: 이름은 '내 정보'에서 보이니 숨기고 버튼 간격을 줄임 */
+@media (max-width: 600px) {
+  .top-name { display: none; }
+  .top-in { gap: 10px; }
+  .top-actions { gap: 6px; }
+  .top-actions .btn.ghost { padding: 8px 10px; }
+}
+@media (max-width: 360px) {
+  .brand { font-size: 0; gap: 0; }
+}
+.fd-sec .cal-stats div { padding: 10px; }
+.fd-sec .cal-stats span { font-size: .74rem; }
+.fd-sec .cal-stats b { font-size: 1.35rem; }
+.fd-sec .cal-stats small { font-size: .72rem; }
+.an-list .badge-s.flat { background: var(--surface); }

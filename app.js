@@ -9,9 +9,9 @@ import {
   collection, getDocs, query, where, onSnapshot, getDocFromCache,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 import { firebaseConfig } from "./firebase-config.js";
-import { GOALS, KINDS } from "./data.js?v=1.3.3";
+import { GOALS, KINDS } from "./data.js?v=1.4.0";
 
-const APP_VERSION = "1.3.3";
+const APP_VERSION = "1.4.0";
 /* ---------- Firebase ---------- */
 const fbApp = initializeApp(firebaseConfig);
 const auth = getAuth(fbApp);
@@ -202,20 +202,47 @@ function myPublic() {
   const t = target();
   const st = streakInfo();
   const out = { nickname: S.nickname, date: S.today.date, pct: t ? Math.round((totals().eaten / t) * 100) : 0, streak: st.now, updatedAt: Date.now(), detail: null };
-  if (S.shareDetail) {
-    recordToday();
-    const week = [];
-    for (let i = 6; i >= 0; i--) {
-      const k = dateKey(kst(Date.now() - i * 864e5));
-      week.push({ k, p: Math.round(dayPct(k) * 100) });
-    }
-    out.detail = {
-      e: totals().eaten, t, foods: S.history[S.today.date]?.f || [], week, best: st.best,
-      weight: S.weight, goal: S.goal === "custom" ? "직접 입력" : (GOALS[S.goal] || GOALS.bulk).label, factor: goalInfo().factor,
-      parts: cleanParts(S.today.parts), program: cleanProgram(S.program), ex: logDone(S.today.ex),
-    };
-  }
+  if (S.shareDetail) out.detail = myDetail();
   return out;
+}
+// 나의 자세한 정보 (친구에게 공개할 때와 '내 정보'에서 같이 씀)
+function myDetail() {
+  recordToday();
+  const t = target();
+  const week = [];
+  for (let i = 6; i >= 0; i--) {
+    const k = dateKey(kst(Date.now() - i * 864e5));
+    week.push({ k, p: Math.round(dayPct(k) * 100) });
+  }
+  return {
+    e: totals().eaten, t, foods: S.history[S.today.date]?.f || [], week, best: streakInfo().best,
+    weight: S.weight, goal: S.goal === "custom" ? "직접 입력" : (GOALS[S.goal] || GOALS.bulk).label, factor: goalInfo().factor,
+    parts: cleanParts(S.today.parts), program: cleanProgram(S.program), ex: logDone(S.today.ex), an: anSummary(),
+  };
+}
+// 운동 분석 요약
+function anSummary() {
+  const list = exStats();
+  if (!list.length) return null;
+  const wv = weeklyVolume();
+  return {
+    v: Math.round(wv[wv.length - 1].v), pv: Math.round(wv[wv.length - 2].v),
+    g: list.filter((x) => x.status === "up").length, n: list.length, pr: list.reduce((a, x) => a + x.prs, 0),
+    x: groupEx(list).flatMap((gr) => gr.items).slice(0, 15).map((x) => ({
+      n: x.n, p: exGroup(x.n).name, s: x.status, c: x.change == null ? null : Math.round(x.change * 100), m: r1(x.m1), bw: x.bw,
+    })),
+  };
+}
+const AN_ST = ["up", "flat", "down", "new"];
+function cleanAn(a) {
+  if (!a || typeof a !== "object") return null;
+  const x = (Array.isArray(a.x) ? a.x : []).slice(0, 15).filter((y) => y && typeof y === "object").map((y) => ({
+    n: str(y.n, 30), p: str(y.p, 40), s: AN_ST.includes(y.s) ? y.s : "flat",
+    c: y.c == null ? null : Math.round(num(y.c, -999, 9999)), m: r1(num(y.m, 0, 9999)), bw: !!y.bw,
+  })).filter((y) => y.n);
+  if (!x.length) return null;
+  const int = (v) => Math.round(num(v, 0, 1e8));
+  return { v: int(a.v), pv: int(a.pv), g: int(a.g), n: int(a.n), pr: int(a.pr), x };
 }
 let publicOn = null;      // 서버의 공개 문서 상태를 기억해서, 꺼진 상태면 매번 지우지 않음
 async function syncPublic() {
@@ -311,6 +338,7 @@ function cleanPublic(id, d) {
       }),
       parts: cleanParts(dt.parts), program: cleanProgram(dt.program),
       ex: (Array.isArray(dt.ex) ? dt.ex : []).slice(0, 20).map(cleanEx).filter((x) => x && x.s),
+      an: cleanAn(dt.an),
       week: (Array.isArray(dt.week) ? dt.week : []).slice(0, 7)
         .filter((w) => w && /^\d{8}$/.test(String(w.k))).map((w) => ({ k: String(w.k), p: Math.round(num(w.p, 0, 999)) })),
     };
@@ -569,6 +597,7 @@ function headerHTML() {
     <nav class="top-actions">
       <button class="btn ghost panel-toggle" data-act="panel" data-p="meal">급식</button>
       <button class="icon-btn" data-act="theme" aria-label="${S.theme === "dark" ? "라이트 모드로" : "다크 모드로"}" title="${S.theme === "dark" ? "라이트 모드" : "다크 모드"}">${S.theme === "dark" ? ICON_SUN : ICON_MOON}</button>
+      <button class="btn ghost" data-act="open-me">내 정보</button>
       <button class="btn ghost" data-act="open-settings">설정</button>
       <button class="btn ghost" data-act="logout">로그아웃</button>
     </nav></div></header>`;
@@ -969,6 +998,24 @@ const fmtVol = (v) => (v >= 10000 ? `${fmtG(v / 1000)}t` : `${Math.round(v).toLo
 const STATUS = { up: ["성장 중", "up"], flat: ["정체", "flat"], down: ["하락", "down"], new: ["새 운동", "new"] };
 const NEXT = { up: "증량", down: "감량", near: "유지", hold: "유지" };
 
+// 운동이 들어 있는 분할(부위)로 묶음. 운동법에 없는 운동은 '기타'
+function exGroup(n) {
+  const prog = cleanProgram(S.program);
+  const i = prog ? prog.splits.findIndex((sp) => sp.ex.some((e) => e.n === n)) : -1;
+  if (i < 0) return { i: 99, name: "기타" };
+  const sp = prog.splits[i];
+  return { i, name: sp.parts.length ? sp.parts.join(" · ") : `분할 ${i + 1}` };
+}
+function groupEx(list) {
+  const groups = [];
+  for (const x of list) {
+    const g = exGroup(x.n);
+    let gr = groups.find((y) => y.i === g.i);
+    if (!gr) groups.push((gr = { ...g, items: [] }));
+    gr.items.push(x);
+  }
+  return groups.sort((a, b) => a.i - b.i);
+}
 function exStatsHTML() {
   const list = exStats();
   const close = `<div class="modal-actions"><button class="btn primary" data-act="close-modal">닫기</button></div>`;
@@ -981,7 +1028,7 @@ function exStatsHTML() {
   const growing = list.filter((x) => x.status === "up").length;
   const prs = list.reduce((a, x) => a + x.prs, 0);
   const pct = (c) => `${c > 0 ? "▲" : c < 0 ? "▼" : ""}${Math.abs(Math.round(c * 100))}%`;
-  const cards = list.map((x) => {
+  const card = (x) => {
     const [label, cls] = STATUS[x.status];
     const d = new Date(keyToUTC(x.last.k));
     const series = x.ss.slice(-10).map((s) => (x.bw ? s.r * s.s : e1rm(s.w, s.r)));
@@ -998,7 +1045,8 @@ function exStatsHTML() {
       </div>
       <p class="es-last">${d.getUTCMonth() + 1}/${d.getUTCDate()} · ${wLabel(x.last.w)} · ${x.last.r}회 · ${x.last.s}${x.last.t ? `/${x.last.t}` : ""}세트</p>
       ${nexts}</li>`;
-  }).join("");
+  };
+  const cards = groupEx(list).map((gr) => `<section class="es-group"><h3 class="es-gh">${esc(gr.name)}</h3><ul class="es-list">${gr.items.map(card).join("")}</ul></section>`).join("");
   return `<h2>운동 분석</h2>
     <div class="cal-stats">
       <div><span>이번 주 볼륨</span><b>${fmtVol(cur)}</b><small>${!prev ? "지난주 기록 없음" : cur ? `지난주보다 ${pct(volChg / 100)}` : `지난주 ${fmtVol(prev)}`}</small></div>
@@ -1007,7 +1055,7 @@ function exStatsHTML() {
     </div>
     <h3 class="es-h">주별 볼륨</h3>${volBarsHTML(wv)}
     ${auto}
-    <ul class="es-list">${cards}</ul>${close}`;
+    ${cards}${close}`;
 }
 // 운동법에 다음 목표 반영: changes = [{ n, from 지금 목표, nx 다음 목표 }]. 한 번에 바꿔서 서로 섞이지 않게 함
 function applyNext(changes) {
@@ -1100,7 +1148,8 @@ function programHTML() {
     <p class="form-err" id="pg-err"></p>
     <div class="modal-actions">${S.program ? `<button class="btn ghost left-auto danger-text" data-act="pg-clear">운동법 지우기</button>` : ""}<button class="btn ghost" data-act="close-modal">취소</button><button class="btn primary" data-act="pg-save">저장</button></div>`;
 }
-function programViewHTML(prog) {
+const progTitle = (prog) => prog.name || `${prog.splits.length}분할`;
+function programViewHTML(prog, withTitle = true) {
   const sched = WEEK.map((w, wi) => {
     const i = prog.sched[wi];
     const sp = prog.splits[i];
@@ -1109,7 +1158,7 @@ function programViewHTML(prog) {
   const splits = prog.splits.map((sp, i) => `
     <li><p class="pv-split-t">${esc(sp.parts.length ? sp.parts.join(" · ") : splitName(sp, i))}</p>
       ${exListHTML(sp.ex)}</li>`).join("");
-  return `<div class="pv"><p class="pv-title">${esc(prog.name || `${prog.splits.length}분할`)}</p>
+  return `<div class="pv">${withTitle ? `<p class="pv-title">${esc(progTitle(prog))}</p>` : ""}
     <div class="pv-week">${sched}</div><ul class="pv-splits">${splits}</ul></div>`;
 }
 
@@ -1484,17 +1533,19 @@ function friendsModalHTML() {
 }
 
 function friendHTML() {
-  const f = friends.find((x) => x.id === ui.modal.id);
+  const me = ui.modal.id === uid;
+  // 나는 공개 설정과 상관없이 내 기기의 최신 정보로 보여 줌
+  const f = me && S ? { id: uid, ...myPublic(), detail: myDetail() } : friends.find((x) => x.id === ui.modal.id);
   const close = `<div class="modal-actions">${ui.modal.back ? `<button class="btn ghost" data-act="back-modal">목록으로</button>` : ""}<button class="btn primary" data-act="close-modal">닫기</button></div>`;
   if (!f) return `<h2>친구</h2><p class="muted">정보를 찾을 수 없어요.</p>${close}`;
-  const me = f.id === uid;
   const top = `<div class="fd-head"><h2>${esc(f.nickname)}${me ? " (나)" : ""}</h2><span class="fd-streak ${f.streak ? "on" : "off"}">${FLAME}<b>${f.streak || 0}</b>일 연속</span></div>`;
   if (!f.detail) {
     return `${top}
       <p class="fd-pct">오늘 <b>${f.pct}%</b> 달성</p>
-      <p class="note">${me ? "자세한 정보를 공개하지 않고 있어요." : "자세한 정보를 공개하지 않았어요."}</p>${close}`;
+      <p class="note">자세한 정보를 공개하지 않았어요.</p>${close}`;
   }
   const dt = f.detail;
+  const sec = (title, body, cls = "") => `<section class="fd-sec ${cls}"><h3 class="fd-sec-t">${title}</h3>${body}</section>`;
   const week = (dt.week || []).map((w) => {
     const d = new Date(keyToUTC(w.k));
     return `<span class="day ${w.p >= 100 ? "full" : ""}"><span class="col"><i style="height:${Math.min(100, w.p)}%"></i></span><b>${WD[d.getUTCDay()]}</b></span>`;
@@ -1502,27 +1553,43 @@ function friendHTML() {
   const foods = (dt.foods || []).length
     ? `<ul class="cal-foods">${dt.foods.map(foodPair).map(([n, g]) => `<li><span>${esc(n)}</span><span>${fmtG(g)}g</span></li>`).join("")}</ul>`
     : `<p class="muted small">아직 오늘 먹은 식품이 없어요.</p>`;
-  return `${top}
-    <h3>최근 7일</h3>
-    <div class="week fd-week">${week}</div>
-    <h3>오늘 먹은 식품</h3>
-    <div class="fd-today">
+  const profile = `<div class="fd-profile">
+      <div><span>몸무게</span><b>${dt.weight ? `${dt.weight}kg` : "-"}</b></div>
+      <div><span>목표</span><b>${esc(dt.goal || "-")}</b>${dt.factor ? `<small>1kg당 ${dt.factor}g</small>` : ""}</div>
+      <div><span>최고 연속</span><b>${dt.best || 0}일</b></div>
+    </div>`;
+  const today = sec("오늘 먹은 식품", `<div class="fd-today">
       <p class="cal-sum"><b>${fmtG(dt.e)}g</b> / ${dt.t}g <span class="${f.pct >= 100 ? "ok" : ""}">${f.pct}%</span></p>
       <div class="fd-bar"><i style="width:${Math.min(100, f.pct)}%"></i></div>
-    </div>
-    ${foods}
-    ${dt.weight ? `<div class="fd-profile">
-      <div><span>몸무게</span><b>${dt.weight}kg</b></div>
-      <div><span>목표</span><b>${esc(dt.goal || "")}</b><small>1kg당 ${dt.factor}g</small></div>
-    </div>` : ""}
-    <div class="cal-stats two">
-      <div><span>지금 연속</span><b>${f.streak || 0}일</b></div>
-      <div><span>최고 연속</span><b>${dt.best || 0}일</b></div>
-    </div>
-    ${dt.parts?.length ? `<h3>오늘 운동한 부위</h3><p class="cal-parts">${dt.parts.map((x) => `<span class="pchip">${x}</span>`).join("")}</p>` : ""}
-    ${dt.ex?.length ? `<h3>오늘 한 운동</h3>${exListHTML(dt.ex)}` : ""}
-    ${dt.program ? programViewHTML(dt.program) : ""}
+    </div>${foods}`);
+  const gym = dt.parts?.length || dt.ex?.length
+    ? sec("오늘 운동", `${dt.parts?.length ? `<p class="cal-parts">${dt.parts.map((x) => `<span class="pchip">${x}</span>`).join("")}</p>` : ""}${dt.ex?.length ? exListHTML(dt.ex) : ""}`)
+    : "";
+  return `${top}
+    ${profile}
+    ${sec("최근 7일", `<div class="week fd-week">${week}</div>`)}
+    ${today}
+    ${gym}
+    ${dt.program ? sec(esc(progTitle(dt.program)), programViewHTML(dt.program, false)) : ""}
+    ${dt.an ? sec("운동 분석", anSummaryHTML(dt.an)) : ""}
     ${close}`;
+}
+function anSummaryHTML(a) {
+  const chg = a.pv ? Math.round(((a.v - a.pv) / a.pv) * 100) : null;
+  const pct = (c) => `${c > 0 ? "▲" : c < 0 ? "▼" : ""}${Math.abs(c)}%`;
+  const groups = [];
+  a.x.forEach((x) => { let g = groups.find((y) => y.p === x.p); if (!g) groups.push((g = { p: x.p, items: [] })); g.items.push(x); });
+  const rows = groups.map((g) => `<p class="pv-split-t">${esc(g.p || "기타")}</p><ul class="an-list">${g.items.map((x) => {
+    const [label, cls] = STATUS[x.s];
+    return `<li><span class="an-n"><b>${esc(x.n)}</b><small>${x.bw ? `총 ${Math.round(x.m)}회` : `추정 1RM ${fmtG(x.m)}kg`}</small></span>
+      <span class="an-r"><span class="badge-s ${cls}">${label}</span>${x.c != null && x.s !== "new" ? `<span class="es-chg ${x.c > 0 ? "up" : x.c < 0 ? "down" : ""}">${pct(x.c)}</span>` : ""}</span></li>`;
+  }).join("")}</ul>`).join("");
+  return `<div class="cal-stats">
+      <div><span>이번 주 볼륨</span><b>${fmtVol(a.v)}</b><small>${chg == null ? "지난주 기록 없음" : a.v ? `지난주보다 ${pct(chg)}` : `지난주 ${fmtVol(a.pv)}`}</small></div>
+      <div><span>성장 중</span><b>${a.g}/${a.n}</b><small>최근 4주</small></div>
+      <div><span>기록 경신</span><b>${a.pr}번</b><small>최근 30일</small></div>
+    </div>
+    <div class="an-groups">${rows}</div>`;
 }
 
 function historyHTML() {
@@ -1885,6 +1952,7 @@ $app.addEventListener("click", async (e) => {
     }
     case "meal-day": ui.mealDay = Number(b.dataset.d); return render();
     case "share-on": S.shareProgress = true; commit("이제 친구들과 달성률을 같이 봐요"); watchFriends(); return;
+    case "open-me": ui.modal = { type: "friend", id: uid }; return render();
     case "friend-detail": ui.modal = { type: "friend", id: b.dataset.id, back: ui.modal?.type === "friends" ? ui.modal : null }; return render();
     case "open-friends": ui.modal = { type: "friends" }; if (!unsubFriends) loadFriends(); return render();
     case "back-modal": ui.modal = ui.modal.back; return render();
@@ -2251,7 +2319,7 @@ $app.addEventListener("input", (e) => {
     document.getElementById("foodRows").innerHTML = foodRowsHTML();
   }
 });
-$app.addEventListener("keydown", (e) => {
+document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && ui.modal && !ui.modal.first) { ui.modal = null; render(); }
   if (e.key === "Enter" && e.target.id === "lx-name") { e.preventDefault(); document.querySelector('[data-act="lx-add-save"]')?.click(); return; }
   if (e.key === "Enter" && e.target.closest(".add-form") && e.target.tagName === "INPUT") {
