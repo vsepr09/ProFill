@@ -9,9 +9,9 @@ import {
   collection, getDocs, query, where, onSnapshot, getDocFromCache,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 import { firebaseConfig } from "./firebase-config.js";
-import { GOALS, KINDS } from "./data.js?v=1.3.2";
+import { GOALS, KINDS } from "./data.js?v=1.3.3";
 
-const APP_VERSION = "1.3.2";
+const APP_VERSION = "1.3.3";
 /* ---------- Firebase ---------- */
 const fbApp = initializeApp(firebaseConfig);
 const auth = getAuth(fbApp);
@@ -805,9 +805,8 @@ function workoutHTML() {
   }
   const parts = todayParts();
   const plan = todayPlan();
-  const badge = plan?.split ? `<span class="day-pill">${esc(splitName(plan.split, plan.i))}</span>` : `<span class="day-pill rest">휴식</span>`;
-  const missing = plan?.split ? plan.split.parts.filter((p) => !parts.includes(p)) : [];
-  const planBtn = missing.length ? `<button class="chip" data-act="parts-plan">계획대로 체크 <span>${missing.join(", ")}</span></button>` : "";
+  const tags = plan?.split ? (plan.split.parts.length ? plan.split.parts : [splitName(plan.split, plan.i)]) : null;
+  const badge = `<span class="day-tags">${tags ? tags.map((t) => `<span class="dtag">${esc(t)}</span>`).join("") : `<span class="dtag rest">휴식</span>`}</span>`;
   const planned = plan?.split?.parts || [];
   const chips = shownParts(parts).map((p) => {
     const on = parts.includes(p);
@@ -818,7 +817,6 @@ function workoutHTML() {
   }).join("");
   return `<div class="sec-head"><div class="wk-title"><h2>오늘 운동</h2>${badge}</div>
       <div class="head-actions"><button class="btn ghost" data-act="open-exstats">분석</button><button class="btn ghost" data-act="open-program">나의 운동법</button></div></div>
-    ${planBtn ? `<div class="chips parts-plan">${planBtn}</div>` : ""}
     <div class="parts">${chips}</div>
     ${exLogHTML()}`;
 }
@@ -1081,7 +1079,6 @@ function programHTML() {
   const n = d.splits.length;
   const splits = d.splits.map((sp, i) => `
     <div class="pg-split">
-      <span class="pg-badge ${sp.parts.length ? "" : "empty"}">${sp.parts.length ? sp.parts.join("·") : "부위를 골라 주세요"}</span>
       <div class="parts small-parts">${PARTS.map((p) => `<button class="part ${sp.parts.includes(p) ? "on" : ""}" data-act="pg-part" data-i="${i}" data-p="${p}" aria-pressed="${sp.parts.includes(p)}"><span class="pn">${p}</span></button>`).join("")}</div>
       ${sp.ex.map((e, j) => exRowHTML(e, i, j)).join("")}
       <button class="btn ghost small left" data-act="pg-ex-add" data-i="${i}">운동 추가</button>
@@ -1110,7 +1107,7 @@ function programViewHTML(prog) {
     return `<span class="pv-day ${i < 0 ? "rest" : ""}"><b>${w}</b>${i < 0 ? "<span>휴식</span>" : (sp.parts.length ? sp.parts : [`분할 ${i + 1}`]).map((p) => `<span>${p}</span>`).join("")}</span>`;
   }).join("");
   const splits = prog.splits.map((sp, i) => `
-    <li><div class="pv-head"><span class="pg-badge">${esc(splitName(sp, i))}</span></div>
+    <li><p class="pv-split-t">${esc(sp.parts.length ? sp.parts.join(" · ") : splitName(sp, i))}</p>
       ${exListHTML(sp.ex)}</li>`).join("");
   return `<div class="pv"><p class="pv-title">${esc(prog.name || `${prog.splits.length}분할`)}</p>
     <div class="pv-week">${sched}</div><ul class="pv-splits">${splits}</ul></div>`;
@@ -1524,7 +1521,7 @@ function friendHTML() {
     </div>
     ${dt.parts?.length ? `<h3>오늘 운동한 부위</h3><p class="cal-parts">${dt.parts.map((x) => `<span class="pchip">${x}</span>`).join("")}</p>` : ""}
     ${dt.ex?.length ? `<h3>오늘 한 운동</h3>${exListHTML(dt.ex)}` : ""}
-    ${dt.program ? `<h3>운동법</h3>${programViewHTML(dt.program)}` : ""}
+    ${dt.program ? programViewHTML(dt.program) : ""}
     ${close}`;
 }
 
@@ -2084,11 +2081,6 @@ $app.addEventListener("click", async (e) => {
       const parts = todayParts();
       S.today.parts = parts.includes(p) ? parts.filter((x) => x !== p) : cleanParts([...parts, p]);
       return commit();
-    }
-    case "parts-plan": {
-      const plan = todayPlan(); if (!plan?.split) return;
-      S.today.parts = cleanParts([...todayParts(), ...plan.split.parts]);
-      return commit("오늘 계획한 부위를 체크했어요");
     }
     case "ypart": {
       const y = S.yesterday; const p = b.dataset.p;

@@ -631,7 +631,6 @@ input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1
 .part.plan { border-style: dashed; border-color: var(--accent); }
 .small-parts .part { padding: 7px 4px; border-radius: 10px; }
 .small-parts .part .pn { font-size: .88rem; }
-.parts-plan { margin: -2px 0 10px; }
 .part-memo { margin-top: 10px; font-size: .88rem; background: var(--surface-2); border-radius: 10px; padding: 9px 12px; }
 .part-memo b { color: var(--accent); margin-right: 6px; }
 .yd-parts-h { font-size: .95rem; margin: 12px 0 8px; }
@@ -641,8 +640,6 @@ input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1
 .pg-n .stepper span { min-width: 52px; }
 .pg-split { border: 1px solid var(--line); border-radius: 12px; padding: 12px; display: grid; gap: 8px; }
 .pg-split-head { display: flex; align-items: center; gap: 10px; }
-.pg-badge.empty { background: var(--surface-2); color: var(--muted); }
-.pg-badge { flex: none; background: var(--accent-soft); color: var(--accent); font-weight: 700; font-size: .8rem; border-radius: 7px; padding: 3px 8px; }
 .pg-split textarea { width: 100%; border: 1px solid var(--line); background: var(--surface); border-radius: 9px; padding: 8px 10px; font: inherit; font-size: .88rem; resize: vertical; color: var(--ink); }
 .pg-days { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
 .pg-dayrow { display: grid !important; gap: 4px !important; justify-items: center; font-size: .85rem; }
@@ -658,7 +655,9 @@ input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1
 .cal-legend i.gym { width: 7px; height: 7px; border-radius: 50%; background: var(--warn); }
 
 .pv { display: grid; gap: 10px; }
-.pv-title { font-weight: 700; }
+.pv-title { font-size: 1rem; font-weight: 700; }
+.pv-split-t { display: flex; align-items: center; gap: 8px; font-size: .95rem; font-weight: 700; color: var(--ink); }
+.pv-split-t::before { content: ""; flex: none; width: 4px; height: 16px; border-radius: 2px; background: var(--accent); }
 .pv-week { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
 .pv-day { display: grid; justify-items: center; align-content: start; gap: 1px; line-height: 1.3; text-align: center; background: var(--accent-soft); color: var(--accent); border-radius: 8px; padding: 6px 2px; font-size: .76rem; font-weight: 600; }
 .pv-day b { color: var(--ink); font-size: .82rem; margin-bottom: 2px; }
@@ -689,7 +688,6 @@ input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1
 .ex-list li span:last-child { color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .pv-splits .ex-list { margin: 0; }
 .pv-splits .ex-list li { padding: 12px 14px; }
-.pg-split .pg-badge { justify-self: start; }
 .ex-row { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) minmax(0, 1fr) 30px; grid-template-areas: "n n n x" "w r s ."; gap: 6px; align-items: center; padding: 8px 0; border-top: 1px dashed var(--line); }
 .ex-row .ex-n { grid-area: n; }
 .ex-row .ex-del { grid-area: x; }
@@ -729,9 +727,10 @@ input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1
 .bw { min-width: 46px; }
 
 /* 오늘 운동 */
-.wk-title { display: flex; align-items: center; gap: 10px; }
-.day-pill { font-size: .8rem; font-weight: 700; background: var(--accent-soft); color: var(--accent); border-radius: 999px; padding: 3px 10px; line-height: 1.4; }
-.day-pill.rest { background: var(--surface-2); color: var(--muted); }
+.wk-title { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; }
+.day-tags { display: inline-flex; flex-wrap: wrap; gap: 5px; min-width: 0; }
+.dtag { font-size: .84rem; font-weight: 700; letter-spacing: .01em; background: var(--accent); color: var(--accent-ink); border-radius: 8px; padding: 4px 10px; line-height: 1.3; white-space: nowrap; }
+.dtag.rest { background: var(--surface-2); color: var(--muted); }
 .wk-lock { display: grid; justify-items: start; gap: 10px; background: var(--surface-2); border-radius: 12px; padding: 16px; }
 .wk-lock p { font-weight: 600; }
 .lx-wrap { margin-top: 16px; display: grid; gap: 10px; }
@@ -756,7 +755,7 @@ input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1
 @media (max-width: 600px) {
   .lx-bot .dots { order: 3; flex-basis: 100%; }
 }
-.wk-title h2, .day-pill { white-space: nowrap; }
+.wk-title h2 { white-space: nowrap; }
 .workout .sec-head { flex-wrap: wrap; row-gap: 8px; }
 
 /* ---------- v11 ---------- */
