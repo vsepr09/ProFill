@@ -80,7 +80,7 @@ button { cursor: pointer; }
 .top-in { display: flex; align-items: center; gap: 16px; height: 60px; }
 .brand { display: flex; align-items: center; gap: 10px; font-weight: 800; font-size: 1.05rem; letter-spacing: -0.02em; }
 .brand-mark { width: 26px; height: 10px; border-radius: 3px; background: linear-gradient(90deg, var(--accent) 62%, var(--planned) 62%); }
-.top-date { color: var(--muted); font-size: .9rem; }
+.top-name { font-weight: 700; font-size: .95rem; padding: 5px 12px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); max-width: 10em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .top-actions { margin-left: auto; display: flex; gap: 8px; align-items: center; }
 .panel-toggle { display: none; }
 
@@ -284,7 +284,6 @@ legend { font-weight: 700; font-size: .95rem; margin-bottom: 6px; padding: 0; }
   .friends-panel { background: var(--surface); }
   .side-close { display: inline-grid; }
   .side-back { display: block; position: fixed; inset: 0; background: rgba(10, 14, 12, .35); z-index: 39; }
-  .top-date { display: none; }
 }
 @media (max-width: 600px) {
   .wrap { padding: 0 14px; }
@@ -325,9 +324,10 @@ legend { font-weight: 700; font-size: .95rem; margin-bottom: 6px; padding: 0; }
 
 
 /* 설정: 운동 시간 여러 개 */
-.wo-row { display: grid; grid-template-columns: 26px 1fr 1fr 30px; align-items: end; gap: 10px; }
-.wo-n { width: 24px; height: 24px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); font-weight: 700; font-size: .8rem; display: grid; place-items: center; margin-bottom: 8px; }
-.wo-row .x { margin-bottom: 4px; }
+.wo-row { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto minmax(0, 1fr) 30px; align-items: center; gap: 8px; }
+.wo-row input { min-width: 0; width: 100%; padding: 9px 8px; }
+.wo-sep { color: var(--muted); font-weight: 700; }
+.wo-n { width: 24px; height: 24px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); font-weight: 700; font-size: .8rem; display: grid; place-items: center; }
 .link.left, .btn.left { justify-self: start; }
 .hint.flat { margin-top: 0; }
 
@@ -356,7 +356,7 @@ legend { font-weight: 700; font-size: .95rem; margin-bottom: 6px; padding: 0; }
 @media (max-width: 600px) {
   .checklist, .foods { padding: 16px 14px 12px; }
   .tips li { grid-template-columns: 1fr; gap: 0; }
-  .wo-row { grid-template-columns: 22px 1fr 1fr 28px; gap: 8px; }
+  .wo-row { grid-template-columns: 22px minmax(0, 1fr) auto minmax(0, 1fr) 28px; gap: 6px; }
 }
 
 /* 직접 입력 목표 */
@@ -452,8 +452,7 @@ legend { font-weight: 700; font-size: .95rem; margin-bottom: 6px; padding: 0; }
 .flame .fl-out { fill: var(--fl-out); }
 .flame .fl-in { fill: var(--fl-in); }
 .hero-side { display: flex; flex-direction: row; align-items: center; gap: 4px; justify-items: initial; }
-.streak { display: inline-flex; align-items: center; gap: 6px; border: 1px solid transparent; background: transparent; border-radius: 12px; padding: 8px 10px; cursor: pointer; }
-.streak:hover { border-color: var(--line); background: var(--surface); }
+.streak { display: inline-flex; align-items: center; gap: 6px; padding: 8px 10px; }
 .streak .flame { width: 30px; height: 35px; }
 .streak b { font-family: var(--num); font-size: 2rem; font-weight: 700; line-height: 1; color: var(--fl-out); font-variant-numeric: tabular-nums; }
 .streak.wait .flame { opacity: .45; }
@@ -677,3 +676,38 @@ legend { font-weight: 700; font-size: .95rem; margin-bottom: 6px; padding: 0; }
 .rp-gym p { font-size: .92rem; background: var(--surface-2); border-radius: 10px; padding: 10px 12px; line-height: 1.6; }
 .rp-gym b { color: var(--accent); margin-right: 6px; }
 .rp-tip { display: block; margin-top: 4px; color: var(--muted); font-size: .84rem; }
+
+/* ---------- v9: 단순화 ---------- */
+.plan.night-only { padding-bottom: 2px; }
+.plan.night-only .night { margin-bottom: 14px; }
+.ex-list { list-style: none; margin: 10px 0 0; padding: 0; background: var(--surface-2); border-radius: 10px; }
+.ex-list li { display: flex; justify-content: space-between; gap: 12px; padding: 8px 12px; font-size: .9rem; border-bottom: 1px solid var(--line); }
+.ex-list li:last-child { border-bottom: 0; }
+.ex-list li span:first-child { font-weight: 600; }
+.ex-list li span:last-child { color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.pv-splits .ex-list { margin-top: 4px; }
+.pg-split .pg-badge { justify-self: start; }
+.ex-row { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) minmax(0, 1fr) 30px; grid-template-areas: "n n n x" "w r s ."; gap: 6px; align-items: center; padding: 8px 0; border-top: 1px dashed var(--line); }
+.ex-row .ex-n { grid-area: n; }
+.ex-row .ex-del { grid-area: x; }
+.ex-row .ex-w-box { grid-area: w; }
+.ex-row .ex-num:nth-of-type(1) { grid-area: r; }
+.ex-row .ex-num:nth-of-type(2) { grid-area: s; }
+.ex-row input { min-width: 0; width: 100%; padding: 8px; color: var(--ink); }
+.ex-w-box .u, .ex-num .u { flex: none; }
+.ex-w-box, .ex-num { display: flex !important; align-items: center; gap: 4px; font-size: .8rem; font-weight: 600; color: var(--muted); min-width: 0; }
+.ex-w-box input:disabled { background: var(--surface-2); }
+.bw { flex: none; border: 1px solid var(--line); background: var(--surface); border-radius: 8px; padding: 6px 7px; font-size: .78rem; font-weight: 700; color: var(--muted); }
+.bw.on { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.ex-w-box:has(.bw.on) .u, .ex-w-box:has(.bw.on) input { display: none; }
+@media (max-width: 600px) {
+  .wo-row { grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) 28px; }
+  .wo-row .wo-n { display: none; }
+  .wo-row input { padding: 8px 6px; }
+  .wo-row input::-webkit-calendar-picker-indicator { display: none; }
+}
+.ex-row input[type="number"] { -moz-appearance: textfield; appearance: textfield; text-align: center; }
+.ex-row input[type="number"]::-webkit-inner-spin-button, .ex-row input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+@media (max-width: 600px) {
+  .ex-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 28px; grid-template-areas: "n n x" "w w ." "r s ."; }
+}

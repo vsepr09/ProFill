@@ -30,26 +30,9 @@ export const GOALS = {
 // 흡수 속도 종류: 추천 시간 배치에 쓰임
 export const KINDS = {
   normal: "일반",
-  fast: "빠른 흡수 (쉐이크 등, 운동 직후 추천)",
-  slow: "천천히 흡수 (우유, 요거트 등, 자기 전 추천)",
+  fast: "빠른 흡수",
+  slow: "천천히 흡수",
 };
 
-// 기본 식품 목록 (대략적인 값)
-export const DEFAULT_FOODS = [
-  { id: "d-chicken", name: "닭가슴살", serving: "1팩 (100g)", protein: 23, kind: "normal" },
-  { id: "d-egg", name: "계란", serving: "1개", protein: 6, kind: "normal" },
-  { id: "d-shake", name: "프로틴 쉐이크", serving: "1스쿱", protein: 24, kind: "fast" },
-  { id: "d-casein", name: "카제인 프로틴", serving: "1스쿱", protein: 24, kind: "slow" },
-  { id: "d-milk", name: "우유", serving: "1팩 (200ml)", protein: 6, kind: "slow" },
-  { id: "d-greek", name: "그릭요거트", serving: "1컵 (100g)", protein: 9, kind: "slow" },
-  { id: "d-soymilk", name: "두유", serving: "1팩 (190ml)", protein: 7, kind: "normal" },
-  { id: "d-tofu", name: "두부", serving: "반 모 (150g)", protein: 13, kind: "normal" },
-  { id: "d-tuna", name: "참치캔", serving: "1캔 (100g)", protein: 15, kind: "normal" },
-  { id: "d-beef", name: "소고기 살코기", serving: "100g", protein: 21, kind: "normal" },
-  { id: "d-pork", name: "돼지 안심", serving: "100g", protein: 22, kind: "normal" },
-  { id: "d-salmon", name: "연어", serving: "100g", protein: 20, kind: "normal" },
-  { id: "d-sausage", name: "닭가슴살 소시지", serving: "1개", protein: 10, kind: "normal" },
-  { id: "d-bar", name: "단백질바", serving: "1개", protein: 15, kind: "normal" },
-  { id: "d-cheese", name: "슬라이스 치즈", serving: "1장", protein: 4, kind: "normal" },
-  { id: "d-almond", name: "아몬드", serving: "한 줌 (30g)", protein: 6, kind: "normal" },
-];
+// 기본 식품은 두지 않음 (각자 직접 추가)
+export const DEFAULT_FOODS = [];

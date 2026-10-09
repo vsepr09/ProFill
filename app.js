@@ -9,7 +9,7 @@ import {
   collection, getDocs, query, where, onSnapshot, getDocFromCache,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 import { firebaseConfig } from "./firebase-config.js";
-import { GOALS, KINDS, DEFAULT_FOODS } from "./data.js";
+import { GOALS, KINDS } from "./data.js";
 
 /* ---------- Firebase ---------- */
 const fbApp = initializeApp(firebaseConfig);
@@ -84,11 +84,11 @@ const val = (id) => document.getElementById(id)?.value ?? "";
 /* ---------- 데이터 ---------- */
 function freshData(nickname) {
   return {
-    nickname, weight: null, goal: "bulk", customFactor: 2, workouts: [], hiddenDefaults: [],
+    nickname, weight: null, goal: "bulk", customFactor: 2, workouts: [],
     theme: document.documentElement.dataset.theme || "light",
     rollover: "empty", customFoods: [], routines: [], autoRoutineId: null,
     today: { date: dateKey(), items: [], parts: [] }, lastItems: [], history: {},
-    shareProgress: false, shareDetail: false, cutoff: "18:20", cutoffV: 2, yesterday: null,
+    shareProgress: false, shareDetail: false, showFriends: true, showPlan: true, cutoff: "18:20", cutoffV: 2, yesterday: null,
     recent: {}, reportSeen: null, guideSeen: false, program: null,
   };
 }
@@ -99,14 +99,22 @@ function migrate(d) {
   out.today.parts = cleanParts(out.today.parts);
   out.program = out.program ? cleanProgram(out.program) : null;
   if (!Array.isArray(d.workouts)) out.workouts = d.workout ? [{ id: newId(), ...d.workout }] : [];
+  // 운동 시간: 시작 + 길이 → 시작 + 끝
+  out.workouts = out.workouts.map((w) => {
+    if (w.end) return { id: w.id || newId(), start: w.start, end: w.end };
+    const e = Math.min(parseTime(w.start || "17:00") + (Number(w.duration) || 60), 23 * 60 + 55);
+    return { id: w.id || newId(), start: w.start || "17:00", end: fmtTime(e - (e % 5)) };
+  });
+  if (out.showFriends === undefined) out.showFriends = true;
+  if (out.showPlan === undefined) out.showPlan = true;
   delete out.workout;
-  if (!Array.isArray(out.hiddenDefaults)) out.hiddenDefaults = [];
-  // 공유 기능을 없애면서, 공유 식품(s:로 시작)을 담아 둔 것도 정리
-  const noShared = (x) => !String(x.foodId).startsWith("s:");
+  delete out.hiddenDefaults;
+  // 공유 식품(s:)과 기본 식품(d:)을 없애면서, 담아 둔 것도 정리
+  const noShared = (x) => !/^(s:|d-)/.test(String(x.foodId));
   out.today.items = out.today.items.filter(noShared);
   out.lastItems = (out.lastItems || []).filter(noShared);
   (out.routines || []).forEach((r) => { r.items = (r.items || []).filter(noShared); });
-  if (out.recent) for (const k of Object.keys(out.recent)) if (k.startsWith("s:")) delete out.recent[k];
+  if (out.recent) for (const k of Object.keys(out.recent)) if (/^(s:|d-)/.test(k)) delete out.recent[k];
   // 처음 기본값(18:30)을 쓰던 사람은 저녁 급식 시간(18:20)에 맞춰 한 번만 바꿈
   if (d.cutoff === undefined || (d.cutoff === "18:30" && !d.cutoffV)) out.cutoff = "18:20";
   out.cutoffV = 2;
@@ -306,10 +314,10 @@ let unsubFriends = null, friendsDay = null;
 // 공개를 켠 친구들이 체크할 때마다 바로 순위에 반영
 function watchFriends() {
   const day = dateKey();
-  if (unsubFriends && friendsDay === day && S?.shareProgress) return;
+  if (unsubFriends && friendsDay === day && S?.shareProgress && S.showFriends) return;
   if (unsubFriends) { unsubFriends(); unsubFriends = null; }
   friendsDay = null;
-  if (!S?.shareProgress || !uid) { friends = []; friendsState = "idle"; updateFriends(); return; }
+  if (!S?.shareProgress || !S.showFriends || !uid) { friends = []; friendsState = "idle"; updateFriends(); return; }
   friendsDay = day;
   unsubFriends = onSnapshot(query(collection(db, "public"), where("date", "==", day)), (snap) => {
     friends = friendsFrom(snap);
@@ -333,15 +341,12 @@ function allFoods() {
   return [
     ...["1", "2", "3"].map(mealFood).filter(Boolean),
     ...S.customFoods.map((f) => ({ ...f, source: "custom" })),
-    ...DEFAULT_FOODS.filter((f) => !S.hiddenDefaults.includes(f.id)).map((f) => ({ ...f, source: "default" })),
   ];
 }
 function getFood(id) {
   if (id.startsWith("meal:")) return mealFood(id.slice(5));
   const c = S.customFoods.find((f) => f.id === id);
-  if (c) return { ...c, source: "custom" };
-  const d = DEFAULT_FOODS.find((f) => f.id === id);
-  return d ? { ...d, source: "default" } : null;
+  return c ? { ...c, source: "custom" } : null;
 }
 const CF_MIN = 0.8, CF_MAX = 3.5;
 const goalInfo = () => (S.goal === "custom"
@@ -413,7 +418,7 @@ function buildPlan() {
     { time: 23 * 60, label: "자기 전", pref: "slow" },
   ];
   for (const w of S.workouts) {
-    const end = Math.min(parseTime(w.start) + w.duration, 23 * 60 + 50);
+    const end = Math.min(parseTime(w.end), 23 * 60 + 50);
     const near = slots.find((s) => s.time >= end - 10 && s.time - end <= 60);
     if (near) { if (!near.post) near.label = `${near.label} (운동 직후)`; near.post = true; }
     else slots.push({ time: end, label: "운동 직후", post: true });
@@ -489,7 +494,7 @@ function render() {
         <div class="main-col">
           ${ydayActive() ? `<section class="block yday">${ydayHTML()}</section>` : ""}
           ${reportActive() ? `<section class="block report">${reportHTML(true)}</section>` : ""}
-          <section class="block plan" id="plan">${planHTML()}</section>
+          ${planBlockHTML()}
           <section class="block checklist">${checklistHTML()}</section>
           <section class="block workout">${workoutHTML()}</section>
           <section class="block foods">${foodsHTML()}</section>
@@ -520,13 +525,11 @@ function animateFill() {
 }
 
 function headerHTML() {
-  const d = kst();
   return `<header class="top"><div class="wrap top-in">
     <div class="brand"><span class="brand-mark" aria-hidden="true"></span>ProFill</div>
-    <div class="top-date">${esc(S.nickname)}님, ${d.getUTCMonth() + 1}월 ${d.getUTCDate()}일 ${WD[d.getUTCDay()]}요일</div>
+    <div class="top-name">${esc(S.nickname)}</div>
     <nav class="top-actions">
       <button class="btn ghost panel-toggle" data-act="panel" data-p="meal">급식</button>
-      <button class="btn ghost" data-act="open-history">기록</button>
       <button class="icon-btn" data-act="theme" aria-label="${S.theme === "dark" ? "라이트 모드로" : "다크 모드로"}" title="${S.theme === "dark" ? "라이트 모드" : "다크 모드"}">${S.theme === "dark" ? ICON_SUN : ICON_MOON}</button>
       <button class="btn ghost" data-act="open-settings">설정</button>
       <button class="btn ghost" data-act="logout">로그아웃</button>
@@ -556,7 +559,7 @@ function heroHTML() {
       <div class="big"><span class="num">${fmtG(eaten)}</span><span class="of">/ ${t || "–"}g</span></div>
       <div class="hero-meta">
         <p class="status ${t && left <= 0 ? "done" : ""}">${status}</p>
-        <p class="muted">${t ? `${goal.label} 목표, ${S.weight}kg × ${goal.factor}g` : ""}${planned > eaten ? `<br>체크리스트를 다 먹으면 ${fmtG(planned)}g` : ""}</p>
+        ${t ? `<p class="muted">${goal.label} · ${S.weight}kg × ${goal.factor}g</p>` : ""}
       </div>
       <div class="hero-side">${streakHTML()}${weekHTML()}</div>
     </div>
@@ -568,7 +571,7 @@ function heroHTML() {
       ${t ? `<div class="goal-line" style="left:${pct(t)}%"><span>목표 ${t}g</span></div>` : ""}
       <div class="ruler" style="--tick:${(10 / max) * 100}%">${labels}</div>
     </div>
-    <div class="friend-strip" id="friends">${friendStripHTML()}</div>`;
+    ${S.showFriends ? `<div class="friend-strip" id="friends">${friendStripHTML()}</div>` : ""}`;
 }
 
 function weekHTML() {
@@ -586,7 +589,7 @@ function streakHTML() {
   const s = streakInfo();
   const state = s.doneToday ? "on" : s.now ? "wait" : "off";
   const label = s.now ? `${s.now}일 연속 달성${s.doneToday ? "" : ", 오늘도 채우면 이어져요"}` : "연속 기록이 없어요. 오늘 목표를 채우면 시작돼요";
-  return `<button class="streak ${state}" data-act="open-history" title="${label}" aria-label="${label}">${FLAME}<b>${s.now}</b></button>`;
+  return `<span class="streak ${state}" title="${label}" role="img" aria-label="${label}">${FLAME}<b>${s.now}</b></span>`;
 }
 
 /* ---------- 운동 부위와 나의 운동법 ---------- */
@@ -594,11 +597,19 @@ const PARTS = ["가슴", "등", "어깨", "하체", "삼두", "이두", "복근"
 const WEEK = ["월", "화", "수", "목", "금", "토", "일"];
 const cleanParts = (a) => (Array.isArray(a) ? PARTS.filter((p) => a.includes(p)) : []);
 const todayParts = () => (S.today.parts = cleanParts(S.today.parts));
-// 운동법 정리: { name, splits: [{ name, parts, memo }], sched: [월..일 → 분할 번호, -1은 휴식] }
+// 운동법 정리: { name, splits: [{ parts, ex: [{ n 이름, w 무게(kg, null이면 맨몸), r 개수, s 세트 }] }], sched: [월..일 → 분할 번호, -1은 휴식] }
+const cleanEx = (e) => {
+  if (!e || typeof e !== "object") return null;
+  const n = str(e.n, 30).trim();
+  if (!n) return null;
+  const bw = e.w === null || e.w === "bw";
+  return { n, w: bw ? null : r1(num(e.w, 0, 500)), r: Math.round(num(e.r, 0, 999)), s: Math.round(num(e.s, 0, 99)) };
+};
 function cleanProgram(p) {
   if (!p || typeof p !== "object" || !Array.isArray(p.splits) || !p.splits.length) return null;
   const splits = p.splits.slice(0, 7).map((x) => ({
-    name: str(x?.name, 20).trim(), parts: cleanParts(x?.parts), memo: str(x?.memo, 200).trim(),
+    parts: cleanParts(x?.parts),
+    ex: (Array.isArray(x?.ex) ? x.ex : []).slice(0, 15).map(cleanEx).filter(Boolean),
   }));
   const sched = Array.from({ length: 7 }, (_, i) => {
     const raw = Number(p.sched?.[i]);
@@ -608,7 +619,16 @@ function cleanProgram(p) {
   });
   return { name: str(p.name, 20).trim(), splits, sched };
 }
-const splitLabel = (prog, i) => `${i + 1}일차${prog.splits[i].name ? ` ${prog.splits[i].name}` : ""}`;
+const exText = (e) => `${e.w == null ? "맨몸" : `${fmtG(e.w)}kg`} · ${e.r}회 · ${e.s}세트`;
+const exListHTML = (ex) => (ex.length ? `<ul class="ex-list">${ex.map((e) => `<li><span>${esc(e.n)}</span><span>${exText(e)}</span></li>`).join("")}</ul>` : "");
+// 운동법이 있으면 운동법에 들어 있는 부위만 보여 줌 (오늘 이미 체크한 부위는 함께)
+function shownParts(checked = []) {
+  const prog = cleanProgram(S.program);
+  if (!prog) return PARTS;
+  const mine = prog.splits.flatMap((sp) => sp.parts);
+  return PARTS.filter((p) => mine.includes(p) || checked.includes(p));
+}
+const splitLabel = (prog, i) => `${i + 1}일차`;
 // 오늘(월=0) 계획
 function todayPlan() {
   const prog = cleanProgram(S.program);
@@ -630,55 +650,73 @@ const agoLabel = (n) => (n == null ? "기록 없음" : n === 1 ? "어제" : `${n
 function workoutHTML() {
   const parts = todayParts();
   const plan = todayPlan();
-  let sub = "운동한 부위를 눌러 체크해요";
+  let sub = "";
   let planBtn = "";
   if (plan) {
     if (plan.split) {
-      sub = `오늘 계획: ${esc(splitLabel(plan.prog, plan.i))}${plan.split.parts.length ? `, ${plan.split.parts.join(", ")}` : ""}`;
+      sub = `오늘 ${splitLabel(plan.prog, plan.i)}`;
       const missing = plan.split.parts.filter((p) => !parts.includes(p));
       if (missing.length) planBtn = `<button class="chip" data-act="parts-plan">계획대로 체크 <span>${missing.join(", ")}</span></button>`;
-    } else sub = "오늘은 운동법상 휴식일이에요";
+    } else sub = "오늘은 휴식";
   }
   const planned = plan?.split?.parts || [];
-  const chips = PARTS.map((p) => {
+  const chips = shownParts(parts).map((p) => {
     const on = parts.includes(p);
     const ago = on ? null : lastDone(p);
     const stale = ago != null && ago >= 7;   // 7일 넘게 쉰 부위는 주황색으로
     return `<button class="part ${on ? "on" : ""} ${planned.includes(p) && !on ? "plan" : ""}" data-act="part" data-p="${p}" aria-pressed="${on}"${stale ? ` title="${ago}일 동안 안 했어요"` : ""}>
       <span class="pn">${p}</span><span class="pl ${stale ? "stale" : ""}">${on ? "오늘" : agoLabel(ago)}</span></button>`;
   }).join("");
-  return `<div class="sec-head"><div><h2>오늘 운동한 부위</h2><p class="sec-sub">${sub}</p></div>
+  return `<div class="sec-head"><div><h2>오늘 운동한 부위</h2>${sub ? `<p class="sec-sub">${sub}</p>` : ""}</div>
       <button class="btn ghost" data-act="open-program">나의 운동법</button></div>
     ${planBtn ? `<div class="chips parts-plan">${planBtn}</div>` : ""}
     <div class="parts">${chips}</div>
-    ${plan?.split?.memo ? `<p class="part-memo"><b>오늘 할 운동</b> ${esc(plan.split.memo)}</p>` : ""}`;
+    ${plan?.split ? exListHTML(plan.split.ex) : ""}`;
 }
 
 /* 나의 운동법 편집 */
+const newEx = () => ({ n: "", w: "", r: 10, s: 3 });
 function programDraft() {
   const p = cleanProgram(S.program);
   if (p) return JSON.parse(JSON.stringify(p));
-  return { name: "", splits: [{ name: "", parts: [], memo: "" }, { name: "", parts: [], memo: "" }, { name: "", parts: [], memo: "" }], sched: [0, 1, 2, -1, 0, 1, 2] };
+  return { name: "", splits: [0, 1, 2].map(() => ({ parts: [], ex: [newEx()] })), sched: [0, 1, 2, -1, 0, 1, 2] };
 }
 function readProgramForm() {
   const d = ui.modal?.draft;
   if (!d || !document.getElementById("pg-name")) return;
   d.name = val("pg-name");
-  d.splits.forEach((sp, i) => {
-    sp.name = document.querySelector(`.pg-sname[data-i="${i}"]`)?.value ?? sp.name;
-    sp.memo = document.querySelector(`.pg-memo[data-i="${i}"]`)?.value ?? sp.memo;
+  document.querySelectorAll(".ex-row").forEach((row) => {
+    const e = d.splits[+row.dataset.i]?.ex[+row.dataset.j];
+    if (!e) return;
+    e.n = row.querySelector(".ex-n").value;
+    if (e.w !== null) e.w = row.querySelector(".ex-w").value;
+    e.r = row.querySelector(".ex-r").value;
+    e.s = row.querySelector(".ex-s").value;
   });
   d.sched = WEEK.map((_, w) => Number(document.querySelector(`.pg-day[data-w="${w}"]`)?.value ?? d.sched[w]));
+}
+function exRowHTML(e, i, j) {
+  const bw = e.w === null;
+  return `<div class="ex-row" data-i="${i}" data-j="${j}">
+    <input class="ex-n" maxlength="30" value="${esc(e.n)}" placeholder="운동 이름" aria-label="운동 이름">
+    <button class="x ex-del" data-act="pg-ex-del" data-i="${i}" data-j="${j}" aria-label="운동 지우기">×</button>
+    <div class="ex-w-box">
+      <input class="ex-w" type="number" inputmode="decimal" min="0" max="500" step="0.5" value="${bw ? "" : esc(e.w)}" ${bw ? "disabled" : ""} placeholder="${bw ? "맨몸" : "무게"}" aria-label="무게 (kg)"><span class="u">kg</span>
+      <button class="bw ${bw ? "on" : ""}" data-act="pg-ex-bw" data-i="${i}" data-j="${j}" aria-pressed="${bw}">맨몸</button>
+    </div>
+    <label class="ex-num"><input class="ex-r" type="number" inputmode="numeric" min="1" max="999" step="1" value="${esc(e.r)}" aria-label="개수"><span class="u">회</span></label>
+    <label class="ex-num"><input class="ex-s" type="number" inputmode="numeric" min="1" max="99" step="1" value="${esc(e.s)}" aria-label="세트 수"><span class="u">세트</span></label>
+  </div>`;
 }
 function programHTML() {
   const d = ui.modal.draft;
   const n = d.splits.length;
   const splits = d.splits.map((sp, i) => `
     <div class="pg-split">
-      <div class="pg-split-head"><span class="pg-badge">${i + 1}일차</span>
-        <input class="pg-sname" data-i="${i}" maxlength="20" value="${esc(sp.name)}" placeholder="이름 (예: 밀기)" aria-label="${i + 1}일차 이름"></div>
+      <span class="pg-badge">${i + 1}일차</span>
       <div class="parts small-parts">${PARTS.map((p) => `<button class="part ${sp.parts.includes(p) ? "on" : ""}" data-act="pg-part" data-i="${i}" data-p="${p}" aria-pressed="${sp.parts.includes(p)}"><span class="pn">${p}</span></button>`).join("")}</div>
-      <textarea class="pg-memo" data-i="${i}" maxlength="200" rows="2" placeholder="하는 운동 (예: 벤치프레스 5세트, 딥스 3세트)" aria-label="${i + 1}일차 운동 내용">${esc(sp.memo)}</textarea>
+      ${sp.ex.map((e, j) => exRowHTML(e, i, j)).join("")}
+      <button class="btn ghost small left" data-act="pg-ex-add" data-i="${i}">운동 추가</button>
     </div>`).join("");
   const days = WEEK.map((w, wi) => `
     <label class="pg-dayrow"><span>${w}</span><select class="pg-day" data-w="${wi}">
@@ -686,7 +724,6 @@ function programHTML() {
       ${d.splits.map((sp, i) => `<option value="${i}" ${d.sched[wi] === i ? "selected" : ""}>${i + 1}일차</option>`).join("")}
     </select></label>`).join("");
   return `<h2>나의 운동법</h2>
-    <p class="muted">몇 분할로, 어떤 부위를, 무슨 요일에 하는지 정해 두면 그날 계획을 보여 줘요.</p>
     <div class="form">
       <div class="row2">
         <label>운동법 이름<input id="pg-name" maxlength="20" value="${esc(d.name)}" placeholder="예: 3분할"></label>
@@ -695,7 +732,6 @@ function programHTML() {
       <fieldset><legend>분할별 운동</legend>${splits}</fieldset>
       <fieldset><legend>요일별 계획</legend><div class="pg-days">${days}</div></fieldset>
     </div>
-    <p class="hint">‘자세한 정보 공개’를 켜면 친구들도 내 운동법을 볼 수 있어요.</p>
     <p class="form-err" id="pg-err"></p>
     <div class="modal-actions">${S.program ? `<button class="btn ghost left-auto danger-text" data-act="pg-clear">운동법 지우기</button>` : ""}<button class="btn ghost" data-act="close-modal">취소</button><button class="btn primary" data-act="pg-save">저장</button></div>`;
 }
@@ -705,8 +741,8 @@ function programViewHTML(prog) {
     return `<span class="pv-day ${i < 0 ? "rest" : ""}"><b>${w}</b>${i < 0 ? "휴식" : `${i + 1}일차`}</span>`;
   }).join("");
   const splits = prog.splits.map((sp, i) => `
-    <li><div class="pv-head"><span class="pg-badge">${i + 1}일차</span>${sp.name ? `<b>${esc(sp.name)}</b>` : ""}<span class="pv-parts">${sp.parts.join(", ") || "부위 없음"}</span></div>
-      ${sp.memo ? `<p>${esc(sp.memo)}</p>` : ""}</li>`).join("");
+    <li><div class="pv-head"><span class="pg-badge">${i + 1}일차</span><span class="pv-parts">${sp.parts.join(", ") || "부위 없음"}</span></div>
+      ${exListHTML(sp.ex)}</li>`).join("");
   return `<div class="pv"><p class="pv-title">${esc(prog.name || `${prog.splits.length}분할`)}</p>
     <div class="pv-week">${sched}</div><ul class="pv-splits">${splits}</ul></div>`;
 }
@@ -730,7 +766,7 @@ function nightHTML() {
   const pre = S.today.items.some((i) => i.pre);
   if (!np.units) {
     if (!pre) return "";
-    return `<div class="night done"><p><b>저녁 이후 계획을 미리 체크했어요.</b> 다르게 먹었으면 내일 낮 12시 전에 고칠 수 있어요.</p></div>`;
+    return `<div class="night done"><p><b>저녁 이후 계획을 미리 체크했어요.</b></p></div>`;
   }
   const rows = np.slots.map((s) => {
     const g = {};
@@ -739,10 +775,9 @@ function nightHTML() {
   }).join("");
   const sum = np.slots.reduce((a, s) => a + s.sum, 0);
   return `<div class="night">
-    <div class="night-head"><h3>오늘 밤 먹을 것</h3><span class="muted small">${S.cutoff} 이후 기기를 못 쓰니 미리 확인해요</span></div>
+    <div class="night-head"><h3>오늘 밤 먹을 것</h3><span class="muted small">${S.cutoff} 이후</span></div>
     <ul class="night-list">${rows}</ul>
-    <div class="night-act"><button class="btn primary" data-act="precheck">모두 먹은 걸로 미리 체크 (+${fmtG(sum)}g)</button>
-      <span class="muted small">다르게 먹었으면 내일 아침에 고칠 수 있어요</span></div>
+    <div class="night-act"><button class="btn primary" data-act="precheck">모두 먹은 걸로 미리 체크 (+${fmtG(sum)}g)</button></div>
   </div>`;
 }
 
@@ -802,8 +837,7 @@ function gymSummary(g) {
     return `${head} ${days} ${most}${skip}`;
   }
   if (!g.days) return `${head} 지난주에는 운동 기록이 없어요.`;
-  return `${head} ${g.days}일 했어요. 가장 많이 한 부위는 ${g.mostParts.join(", ")}(${g.most}번)이에요.
-    <span class="rp-tip">‘나의 운동법’을 정해 두면 계획대로 했는지, 빠뜨린 부위가 있는지도 알려 줘요.</span>`;
+  return `${head} ${g.days}일 했어요. 가장 많이 한 부위는 ${g.mostParts.join(", ")}(${g.most}번)이에요.`;
 }
 function reportActive() {
   if (new Date(keyToUTC(S.today.date)).getUTCDay() !== 1) return false;   // 월요일에만
@@ -871,22 +905,27 @@ function ydayHTML() {
       <span class="ck-g">${fmtG(it.g * it.eaten)}<small>/${fmtG(it.g * it.qty)}g</small></span>
     </li>`;
   }).join("");
-  return `<div class="sec-head"><div><h2>어제 기록 마무리하기</h2><p class="sec-sub">${d.getUTCMonth() + 1}월 ${d.getUTCDate()}일 ${WD[d.getUTCDay()]}요일, 오늘 낮 12시까지 고칠 수 있어요</p></div>
+  return `<div class="sec-head"><div><h2>어제 기록 마무리하기</h2><p class="sec-sub">${d.getUTCMonth() + 1}월 ${d.getUTCDate()}일 ${WD[d.getUTCDay()]}요일</p></div>
       <p class="yd-sum"><b>${fmtG(e)}</b>/${y.t}g <span class="${pct >= 100 ? "ok" : ""}">${pct}%</span></p></div>
-    <p class="hint hint-top">기기를 못 쓴 저녁 이후에 실제로 먹은 것과 운동한 부위를 체크해 주세요. 연속 기록과 달력도 같이 고쳐져요.</p>
     ${rows ? `<ul class="ck-list">${rows}</ul>` : ""}
     <h3 class="yd-parts-h">어제 운동한 부위</h3>
-    <div class="parts small-parts">${PARTS.map((p) => { const on = (y.parts || []).includes(p); return `<button class="part ${on ? "on" : ""}" data-act="ypart" data-p="${p}" aria-pressed="${on}"><span class="pn">${p}</span></button>`; }).join("")}</div>
+    <div class="parts small-parts">${shownParts(cleanParts(y.parts)).map((p) => { const on = (y.parts || []).includes(p); return `<button class="part ${on ? "on" : ""}" data-act="ypart" data-p="${p}" aria-pressed="${on}"><span class="pn">${p}</span></button>`; }).join("")}</div>
     <div class="yd-actions"><button class="btn primary" data-act="yday-done">다 맞아요</button></div>`;
 }
 
+// 오늘 밤 먹을 것은 추천을 꺼도 보여 줌. 추천은 담은 식품이 있을 때만
+function planBlockHTML() {
+  const night = nightHTML();
+  const showPlan = S.showPlan !== false && S.today.items.length;
+  if (!night && !showPlan) return `<div id="plan" hidden></div>`;
+  return `<section class="block plan ${showPlan ? "" : "night-only"}" id="plan">${night}${showPlan ? planHTML() : ""}</section>`;
+}
 function planHTML() {
   const t = target();
   const { planned } = totals();
   const p = buildPlan();
   let body;
-  if (!S.today.items.length) body = `<p class="empty">아래 목록에서 오늘 먹을 식품을 담으면, 언제 무엇을 먹으면 좋을지 시간대별로 나눠 드려요.</p>`;
-  else if (!p.shown.length) body = `<p class="empty">${p.leftover ? "오늘 남은 시간이 거의 없어요. 남은 식품은 내일 루틴에 넣어 보세요." : "체크리스트를 모두 먹었어요."}</p>`;
+  if (!p.shown.length) body = `<p class="empty">${p.leftover ? "오늘 남은 시간이 없어요." : "다 먹었어요."}</p>`;
   else body = `<ol class="timeline">${p.shown.map((s) => slotHTML(s, s === p.next)).join("")}</ol>`;
 
   let summary = "";
@@ -894,13 +933,12 @@ function planHTML() {
     const gap = r1(t - planned);
     if (gap > 0) {
       const sug = suggest(gap);
-      summary = `<div class="plan-sum warn"><p>체크리스트를 다 먹어도 목표보다 <strong>${fmtG(gap)}g</strong> 부족해요.${sug.length ? " 이렇게 채울 수 있어요." : ""}</p>
+      summary = `<div class="plan-sum warn"><p><strong>${fmtG(gap)}g</strong> 부족해요</p>
         ${sug.length ? `<div class="chips">${sug.map((s) => `<button class="chip" data-act="add-food" data-id="${esc(s.f.id)}" data-n="${s.n}">${esc(s.f.name)}${s.n > 1 ? ` ×${s.n}` : ""} 담기 <span>+${fmtG(s.f.protein * s.n)}g</span></button>`).join("")}</div>` : ""}</div>`;
-    } else summary = `<div class="plan-sum ok"><p>체크리스트를 다 먹으면 목표를 채워요.</p></div>`;
+    } else summary = `<div class="plan-sum ok"><p>다 먹으면 목표 달성</p></div>`;
   }
-  return `${nightHTML()}<div class="sec-head"><h2>오늘의 추천</h2><button class="link" data-act="open-info">추천 기준</button></div>
-    ${summary}${body}
-    ${S.workouts.length ? "" : `<p class="hint">설정에서 운동 시간을 넣으면 운동 직후에 먹을 것도 챙겨 드려요.</p>`}`;
+  return `<div class="sec-head"><h2>오늘의 추천</h2><button class="link" data-act="open-info">추천 기준</button></div>
+    ${summary}${body}`;
 }
 
 function slotHTML(s, isNext) {
@@ -938,30 +976,23 @@ function checklistHTML() {
   let empty = "";
   if (!items.length) {
     const r = S.routines;
-    empty = `<div class="empty"><p>아직 담은 식품이 없어요.${S.lastItems.length || r.length ? " 한 번에 불러올 수도 있어요." : ""}</p>
+    empty = `<div class="empty"><p>아직 담은 식품이 없어요.</p>
       ${S.lastItems.length || r.length ? `<div class="chips">${S.lastItems.length ? `<button class="chip" data-act="load-last">지난번 목록 불러오기</button>` : ""}${r.map((x) => `<button class="chip" data-act="load-routine" data-id="${esc(x.id)}">${esc(x.name)}</button>`).join("")}</div>` : ""}</div>`;
   }
-  const { planned } = totals();
-  return `<div class="sec-head"><div><h2>오늘 먹을 것</h2><p class="sec-sub">${items.length ? `식품 ${items.length}가지, 다 먹으면 ${fmtG(planned)}g` : "아래 목록에서 골라 담아요"}</p></div>
+  return `<div class="sec-head"><h2>오늘 먹을 것</h2>
       <div class="head-actions"><button class="btn ghost" data-act="open-routines">루틴</button>${items.length ? `<button class="btn ghost" data-act="clear">비우기</button>` : ""}</div></div>
-    ${items.length ? `<p class="hint hint-top">먹을 때마다 동그라미를 눌러 체크해요.</p><ul class="ck-list">${rows}</ul>` : empty}`;
+    ${items.length ? `<ul class="ck-list">${rows}</ul>` : empty}`;
 }
 
 function foodsHTML() {
-  const tabs = [["all", "전체"], ["meal", "급식"], ["custom", "내가 추가"], ["default", "기본"]];
-  const hidden = S.hiddenDefaults.length;
-  return `<div class="sec-head"><div><h2>단백질 식품 목록</h2><p class="sec-sub">여기서 골라 ‘오늘 먹을 것’에 담아요</p></div><button class="btn ${ui.addOpen ? "ghost" : "primary"}" data-act="toggle-add">${ui.addOpen ? "닫기" : "직접 추가"}</button></div>
+  const tabs = [["all", "전체"], ["meal", "급식"], ["custom", "내 식품"]];
+  return `<div class="sec-head"><h2>단백질 식품 목록</h2><button class="btn ${ui.addOpen ? "ghost" : "primary"}" data-act="toggle-add">${ui.addOpen ? "닫기" : "직접 추가"}</button></div>
     ${ui.addOpen ? addFormHTML() : ""}
     <div class="filters">
       <input type="search" id="foodSearch" placeholder="식품 이름으로 찾기" value="${esc(ui.query)}" aria-label="식품 검색">
       <div class="seg-ctl" role="group" aria-label="목록 거르기">${tabs.map(([k, l]) => `<button aria-pressed="${ui.filter === k}" data-act="filter" data-f="${k}">${l}</button>`).join("")}</div>
     </div>
-    <ul class="food-rows" id="foodRows">${foodRowsHTML()}</ul>
-    <p class="hint">기본 식품의 단백질 양은 대략적인 값이에요. 먹는 제품의 포장지 값과 다르면 직접 추가해 주세요.</p>
-    <div class="foods-foot">
-      ${hidden < DEFAULT_FOODS.length ? `<button class="link danger" data-act="hide-all-defaults">기본 식품 모두 지우기</button>` : ""}
-      ${hidden ? `<button class="link" data-act="restore-defaults">지운 기본 식품 되살리기 (${hidden}개)</button>` : ""}
-    </div>`;
+    <ul class="food-rows" id="foodRows">${foodRowsHTML()}</ul>`;
 }
 
 function foodRowsHTML() {
@@ -972,16 +1003,15 @@ function foodRowsHTML() {
     .sort((a, b) => b.sc - a.sc || a.i - b.i)
     .map((x) => x.f);
   if (!list.length) {
-    const msg = q ? "찾는 식품이 없어요. ‘직접 추가’로 등록해 보세요."
-      : ui.filter === "custom" ? "직접 추가한 식품이 없어요. 자주 먹는 보충제나 간식을 ‘직접 추가’로 등록해 보세요."
+    const msg = q ? "찾는 식품이 없어요."
       : ui.filter === "meal" ? "오늘 급식 정보가 없어요."
-      : "목록이 비어 있어요.";
+      : "아직 식품이 없어요.";
     return `<li class="empty">${msg}</li>`;
   }
   return list.map((f) => {
     const inList = S.today.items.find((i) => i.foodId === f.id);
     const often = f.source !== "meal" && recentScore(f.id) >= 2 ? `<span class="tag often">자주 먹음</span>` : "";
-    const tag = often + (f.source === "custom" ? `<span class="tag">내 식품</span>` : "");
+    const tag = often;
     const kind = f.kind === "fast" ? `<span class="tag soft">빠른 흡수</span>` : f.kind === "slow" ? `<span class="tag soft">천천히 흡수</span>` : "";
     const btn = f.kind === "meal" && inList
       ? `<button class="btn add in" disabled>담김</button>`
@@ -989,7 +1019,7 @@ function foodRowsHTML() {
     return `<li class="food">
       <div class="food-main"><span class="food-name">${esc(f.name)}</span>${tag}${kind}<span class="food-meta">${esc(f.serving)}</span></div>
       ${f.source === "custom" ? `<span class="food-edit"><button class="link" data-act="edit-food" data-id="${esc(f.id)}">수정</button><button class="link danger" data-act="del-food" data-id="${esc(f.id)}">삭제</button></span>`
-        : f.source === "default" ? `<span class="food-edit"><button class="link danger" data-act="hide-default" data-id="${esc(f.id)}">삭제</button></span>` : `<span class="food-edit"></span>`}
+        : `<span class="food-edit"></span>`}
       <span class="food-g">${fmtG(f.protein)}g</span>
       ${btn}
     </li>`;
@@ -1033,7 +1063,7 @@ function mealsHTML() {
       <p class="meal-date">${d.getUTCMonth() + 1}월 ${d.getUTCDate()}일 ${WD[d.getUTCDay()]}요일${sum ? `, 세 끼 합계 <b>${fmtG(sum)}g</b>` : ""}</p>
       ${inner}
       ${any ? `<button class="btn ghost wide" data-act="meal-all">세 끼 모두 담기</button>` : ""}
-      ${day === 1 && sum && t ? `<p class="tomorrow-note">${sum >= t ? "내일은 급식만 다 먹어도 목표를 채울 수 있어요." : `내일은 급식을 다 먹어도 <b>${fmtG(t - sum)}g</b>이 모자라요. 보충제를 미리 챙겨 두세요.`}</p>` : ""}
+      ${day === 1 && sum && t ? `<p class="tomorrow-note">${sum >= t ? "급식만으로 목표 달성" : `급식만으로는 <b>${fmtG(t - sum)}g</b> 부족`}</p>` : ""}
 `;
 }
 
@@ -1044,7 +1074,6 @@ const rankedFriends = () => friends.filter((f) => f.date === dateKey())
 function friendStripHTML() {
   if (!S.shareProgress) {
     return `<h2 class="fs-label">오늘 친구들</h2>
-      <span class="fs-text">달성률을 공개하면 친구들과 오늘 기록을 같이 볼 수 있어요.</span>
       <button class="btn small" data-act="share-on">공개하고 같이 보기</button>`;
   }
   if (friendsState === "error") {
@@ -1070,7 +1099,7 @@ function friendStripHTML() {
 function friendsModalHTML() {
   const head = `<div class="fd-head"><h2>오늘 친구들</h2><button class="link" data-act="refresh-friends">새로고침</button></div>`;
   const close = `<div class="modal-actions"><button class="btn primary" data-act="close-modal">닫기</button></div>`;
-  if (friendsState === "error") return `${head}<p class="muted">친구 목록을 불러오지 못했어요. 인터넷 연결이나 Firestore 규칙을 확인해 주세요.</p>${close}`;
+  if (friendsState === "error") return `${head}<p class="muted">친구 목록을 불러오지 못했어요.</p>${close}`;
   const list = rankedFriends();
   const rows = list.map((f, i) => `
     <li class="${f.id === uid ? "me" : ""}">
@@ -1081,8 +1110,7 @@ function friendsModalHTML() {
       <span class="fstreak">${f.streak ? `${FLAME}${f.streak}일 연속` : ""}</span>
       <button class="link fmore" data-act="friend-detail" data-id="${esc(f.id)}">자세히 보기</button>
     </li>`).join("");
-  return `${head}${list.length ? `<ol class="friend-list">${rows}</ol>` : `<p class="muted">아직 오늘 기록을 올린 친구가 없어요.</p>`}
-    <p class="hint">공개 범위는 설정에서 바꿀 수 있어요.</p>${close}`;
+  return `${head}${list.length ? `<ol class="friend-list">${rows}</ol>` : `<p class="muted">아직 오늘 기록을 올린 친구가 없어요.</p>`}${close}`;
 }
 
 function friendHTML() {
@@ -1094,7 +1122,7 @@ function friendHTML() {
   if (!f.detail) {
     return `${top}
       <p class="fd-pct">오늘 <b>${f.pct}%</b> 달성</p>
-      <p class="note">${me ? "자세한 정보를 공개하지 않고 있어요. 설정의 ‘자세한 정보 공개’를 켜면 친구들이 볼 수 있어요." : `${esc(f.nickname)}님은 자세한 정보를 공개하지 않았어요.`}</p>${close}`;
+      <p class="note">${me ? "자세한 정보를 공개하지 않고 있어요." : "자세한 정보를 공개하지 않았어요."}</p>${close}`;
   }
   const dt = f.detail;
   const week = (dt.week || []).map((w) => {
@@ -1154,7 +1182,7 @@ function historyHTML() {
     const pct = h.t ? Math.round((h.e / h.t) * 100) : 0;
     detail = `<p class="cal-sum"><b>${fmtG(h.e)}g</b> / ${h.t}g <span class="${pct >= 100 ? "ok" : ""}">${pct}%</span></p>
       ${partsLine}
-      ${h.f && h.f.length ? `<ul class="cal-foods">${h.f.map(foodPair).map(([n, g]) => `<li><span>${esc(n)}</span><span>${fmtG(g)}g</span></li>`).join("")}</ul>` : `<p class="muted small">이 날은 먹은 식품 목록이 남아 있지 않아요.</p>`}`;
+      ${h.f && h.f.length ? `<ul class="cal-foods">${h.f.map(foodPair).map(([n, g]) => `<li><span>${esc(n)}</span><span>${fmtG(g)}g</span></li>`).join("")}</ul>` : ""}`;
   }
   const s = streakInfo();
   const curYm = todayK.slice(0, 6);
@@ -1186,6 +1214,7 @@ function settingsDraft() {
   return {
     nick: S.nickname, weight: S.weight ?? "", goal: S.goal, customFactor: S.customFactor ?? 2, rollover: S.rollover,
     workouts: S.workouts.map((w) => ({ ...w })), share: !!S.shareProgress, detail: !!S.shareDetail, cutoff: S.cutoff || "",
+    showFriends: S.showFriends !== false, showPlan: S.showPlan !== false,
   };
 }
 function readSettingsForm() {
@@ -1198,9 +1227,11 @@ function readSettingsForm() {
   d.share = !!document.getElementById("s-share")?.checked;
   d.detail = !!document.getElementById("s-detail")?.checked;
   d.cutoff = val("s-cutoff");
+  d.showFriends = !!document.getElementById("s-friends")?.checked;
+  d.showPlan = !!document.getElementById("s-plan")?.checked;
   d.rollover = val("s-roll") || d.rollover;
   d.workouts = [...document.querySelectorAll(".wo-row")].map((r) => ({
-    id: r.dataset.id, start: r.querySelector(".wo-start").value, duration: r.querySelector(".wo-dur").value,
+    id: r.dataset.id, start: r.querySelector(".wo-start").value, end: r.querySelector(".wo-end").value,
   }));
 }
 
@@ -1213,7 +1244,7 @@ function settingsHTML(first) {
   const d = ui.modal.draft;
   const goals = Object.entries(GOALS).map(([k, g]) => `
     <label class="goal"><input type="radio" name="s-goal" value="${k}" ${d.goal === k ? "checked" : ""}>
-      <span class="goal-name">${g.label}</span><span class="goal-f">1kg당 ${g.factor}g</span><span class="goal-d">${g.desc}</span></label>`).join("") + `
+      <span class="goal-name">${g.label}</span><span class="goal-f">1kg당 ${g.factor}g</span></label>`).join("") + `
     <label class="goal custom"><input type="radio" name="s-goal" value="custom" ${d.goal === "custom" ? "checked" : ""}>
       <span class="goal-name">직접 입력</span>
       <span class="cf-row">1kg당 <input id="s-cf" type="number" inputmode="decimal" min="${CF_MIN}" max="${CF_MAX}" step="0.1" value="${esc(d.customFactor)}" aria-label="체중 1kg당 단백질 g">g</span>
@@ -1221,13 +1252,13 @@ function settingsHTML(first) {
   const wo = d.workouts.map((w, n) => `
     <div class="wo-row" data-id="${esc(w.id)}">
       <span class="wo-n">${n + 1}</span>
-      <label>시작<input type="time" class="wo-start" min="08:00" max="23:55" step="300" value="${esc(w.start)}"></label>
-      <label>길이 (분)<input type="number" class="wo-dur" inputmode="numeric" min="5" max="480" step="5" value="${esc(w.duration)}"></label>
+      <input type="time" class="wo-start" step="300" value="${esc(w.start)}" aria-label="${n + 1}번째 운동 시작">
+      <span class="wo-sep">~</span>
+      <input type="time" class="wo-end" step="300" value="${esc(w.end)}" aria-label="${n + 1}번째 운동 끝">
       <button class="x" data-act="wo-del" data-id="${esc(w.id)}" aria-label="${n + 1}번째 운동 시간 지우기">×</button>
     </div>`).join("");
   const roll = [["empty", "비워요"], ["yesterday", "전날 목록 그대로 (체크만 해제)"], ["routine", "‘매일 자동’ 루틴으로 채워요"]];
   return `<h2>${first ? "시작하기 전에" : "설정"}</h2>
-    ${first ? `<p class="muted">몸무게와 목표를 고르면 하루 단백질 목표가 정해져요.</p>` : ""}
     <div class="form">
       <div class="row2">
         <label>닉네임<input id="s-nick" maxlength="12" value="${esc(d.nick)}"></label>
@@ -1236,22 +1267,26 @@ function settingsHTML(first) {
       <fieldset><legend>목표</legend><div class="goals">${goals}</div>
         <button class="link left" data-act="open-info">이 숫자의 근거 보기</button></fieldset>
       <fieldset><legend>운동 시간</legend>
-        ${wo || `<p class="hint flat">운동 시간을 넣으면 운동 직후에 먹을 것도 추천해 드려요. 하루에 여러 번 넣을 수 있어요.</p>`}
+        ${wo}
         <button class="btn ghost small left" data-act="wo-add">운동 시간 추가</button></fieldset>
       <fieldset><legend>기기 사용 마감 시간</legend>
-        <div class="row-cut"><input type="time" id="s-cutoff" step="300" value="${esc(d.cutoff)}" aria-label="기기 사용 마감 시간"><button class="link" data-act="cutoff-clear">사용 안 함</button></div>
-        <p class="hint flat">오후 4시부터 ‘오늘 밤 먹을 것’을 보여 주고, 저녁 급식과 이 시간 이후에 먹을 것을 미리 체크할 수 있어요. 다음 날 낮 12시까지는 어제 기록을 고칠 수 있어요.</p></fieldset>
+        <div class="row-cut"><input type="time" id="s-cutoff" step="300" value="${esc(d.cutoff)}" aria-label="기기 사용 마감 시간"><button class="link" data-act="cutoff-clear">사용 안 함</button></div></fieldset>
       <fieldset><legend>자정이 지나면 체크리스트를</legend>
-        <select id="s-roll">${roll.map(([k, l]) => `<option value="${k}" ${d.rollover === k ? "selected" : ""} ${k === "routine" && !S.routines.length ? "disabled" : ""}>${l}</option>`).join("")}</select>
-        ${S.routines.length ? "" : `<p class="hint flat">루틴을 저장하면 ‘매일 자동’을 고를 수 있어요.</p>`}</fieldset>
+        <select id="s-roll">${roll.map(([k, l]) => `<option value="${k}" ${d.rollover === k ? "selected" : ""} ${k === "routine" && !S.routines.length ? "disabled" : ""}>${l}</option>`).join("")}</select></fieldset>
+      <fieldset><legend>화면</legend>
+        <label class="switch-row"><span><b>오늘의 추천</b></span>
+          <input type="checkbox" role="switch" class="switch" id="s-plan" ${d.showPlan ? "checked" : ""}></label>
+        <label class="switch-row"><span><b>오늘 친구들</b></span>
+          <input type="checkbox" role="switch" class="switch" id="s-friends" ${d.showFriends ? "checked" : ""}></label>
+      </fieldset>
       <fieldset><legend>친구</legend>
-        <label class="switch-row"><span><b>달성률 공개</b><small>닉네임, 오늘 달성률, 연속 기록을 친구들에게 보여줘요. 켜야 친구들 기록도 볼 수 있어요.</small></span>
+        <label class="switch-row"><span><b>달성률 공개</b></span>
           <input type="checkbox" role="switch" class="switch" id="s-share" ${d.share ? "checked" : ""}></label>
-        <label class="switch-row ${d.share ? "" : "off"}" id="s-detail-row"><span><b>자세한 정보 공개</b><small>친구가 ‘자세히 보기’를 누르면 오늘 먹은 양과 식품, 운동한 부위, 나의 운동법, 최근 7일 기록, 몸무게와 목표를 볼 수 있어요.</small></span>
+        <label class="switch-row ${d.share ? "" : "off"}" id="s-detail-row"><span><b>자세한 정보 공개</b></span>
           <input type="checkbox" role="switch" class="switch" id="s-detail" ${d.share && d.detail ? "checked" : ""} ${d.share ? "" : "disabled"}></label>
       </fieldset>
       ${first ? "" : `<fieldset class="danger-zone"><legend>계정</legend>
-        ${d.delStep ? `<p class="small">기록, 루틴, 내가 추가한 식품, 친구 목록 공개 정보가 모두 지워지고 되돌릴 수 없어요. 계속하려면 비밀번호를 입력해 주세요.</p>
+        ${d.delStep ? `<p class="small">모든 기록이 지워지고 되돌릴 수 없어요.</p>
           <div class="row-inline"><input type="password" id="del-pw" autocomplete="current-password" placeholder="비밀번호" aria-label="비밀번호">
             <button class="btn danger" data-act="delete-account">영구 삭제</button><button class="btn ghost" data-act="delete-cancel">그만두기</button></div>
           <p class="form-err" id="del-err"></p>`
@@ -1270,14 +1305,12 @@ function settingsHTML(first) {
 
 function guideHTML() {
   return `<h2>ProFill 사용법</h2>
-    <p class="muted">하루 단백질과 운동을 이렇게 기록해요.</p>
     <ol class="guide">
-      <li><span class="g-n">1</span><div><b>오늘 먹을 것 담기</b><p>식품 목록이나 급식 칸에서 오늘 먹을 것을 <span class="g-btn">담기</span> 해요. 그러면 언제 무엇을 먹을지 ‘오늘의 추천’에 나와요.</p></div></li>
-      <li><span class="g-n">2</span><div><b>먹을 때마다 체크</b><p>‘오늘 먹을 것’에서 먹을 때마다 동그라미 <span class="g-dot"></span> 를 눌러요.</p></div></li>
-      <li><span class="g-n">3</span><div><b>bar 채우기</b><p>맨 위 bar가 채워지고, 목표를 채운 날이 이어지면 파란 불꽃 ${FLAME} 숫자가 올라가요.</p></div></li>
-      <li><span class="g-n">4</span><div><b>운동한 부위 체크</b><p>‘오늘 운동한 부위’에서 운동한 부위를 눌러요. <span class="g-btn">나의 운동법</span> 에 분할과 요일을 정해 두면 그날 할 부위를 알려 주고, 오래 쉰 부위는 주황색으로 보여 줘요.</p></div></li>
+      <li><span class="g-n">1</span><div><b>담기</b><p>급식이나 직접 추가한 식품을 <span class="g-btn">담기</span></p></div></li>
+      <li><span class="g-n">2</span><div><b>체크</b><p>먹을 때마다 <span class="g-dot"></span> 누르기</p></div></li>
+      <li><span class="g-n">3</span><div><b>채우기</b><p>목표를 채운 날이 이어지면 ${FLAME} 숫자가 올라가요</p></div></li>
+      <li><span class="g-n">4</span><div><b>운동</b><p>운동한 부위 누르기</p></div></li>
     </ol>
-    <p class="note">저녁에 기기를 못 쓰면, 오후 4시부터 뜨는 ‘오늘 밤 먹을 것’에서 미리 체크하고 다음 날 아침에 고치면 돼요.</p>
     <div class="modal-actions"><button class="btn primary" data-act="guide-done">시작하기</button></div>`;
 }
 
@@ -1291,11 +1324,8 @@ function routinesHTML() {
       <button class="link danger" data-act="del-routine" data-id="${esc(r.id)}">삭제</button></li>`;
   }).join("");
   return `<h2>루틴</h2>
-    <p class="muted">자주 먹는 체크리스트를 저장해 두고 한 번에 담아요.</p>
     <div class="row-inline"><input id="r-name" maxlength="20" placeholder="예: 운동하는 날" aria-label="루틴 이름"><button class="btn primary" data-act="save-routine" ${S.today.items.length ? "" : "disabled"}>지금 체크리스트 저장</button></div>
-    ${S.today.items.length ? "" : `<p class="hint">체크리스트에 식품을 담으면 루틴으로 저장할 수 있어요.</p>`}
     <ul class="routines">${list || `<li class="empty">저장한 루틴이 없어요.</li>`}</ul>
-    <p class="hint">‘매일 자동’을 켜 두면 자정이 지난 뒤 그 루틴이 체크리스트에 저절로 들어가요. 급식은 그날 메뉴의 단백질로 바뀌어요.</p>
     <div class="modal-actions"><button class="btn primary" data-act="close-modal">닫기</button></div>`;
 }
 
@@ -1311,7 +1341,6 @@ function infoHTML() {
       <div class="formula"><span>하루 목표</span><strong>몸무게(kg) × 목표 숫자</strong></div>
       ${w ? `<p class="muted center-t">몸무게 ${w}kg 기준으로 계산했어요</p>` : ""}
       <ul class="goal-basis">${goals}</ul>
-      <p class="muted">‘직접 입력’을 고르면 위 근거를 참고해 1kg당 ${CF_MIN}–${CF_MAX}g 사이에서 원하는 숫자를 정할 수 있어요.</p>
       <h3>언제 먹으면 좋을까</h3>
       <ul class="tips">
         <li><strong>한 번에 20–40g</strong><span>한 끼에 몰아 먹기보다 나눠 먹어요.</span></li>
@@ -1346,7 +1375,7 @@ function renderAuth() {
       <p class="form-err">${esc(ui.authError)}</p>
       <button class="btn primary wide" type="submit">${signup ? "가입하고 시작하기" : "로그인"}</button>
     </form>
-    ${signup ? `<p class="hint">비밀번호를 잊으면 되찾을 수 없어요. 잊지 않을 비밀번호로 정해 주세요.</p>` : ""}
+    ${signup ? `<p class="hint">비밀번호는 찾을 수 없으니 꼭 기억해 주세요.</p>` : ""}
   </div></main>`;
   document.getElementById("authForm").addEventListener("submit", onAuthSubmit);
 }
@@ -1529,28 +1558,6 @@ $app.addEventListener("click", async (e) => {
       ui.addOpen = false; ui.filter = "all"; ui.query = "";
       return commit(`${eul(name)} 목록에 추가했어요`);
     }
-    case "hide-default": {
-      const f = DEFAULT_FOODS.find((x) => x.id === b.dataset.id);
-      if (!f) return;
-      snapshot();
-      S.hiddenDefaults.push(f.id);
-      S.today.items = S.today.items.filter((x) => x.foodId !== f.id);
-      S.lastItems = S.lastItems.filter((x) => x.foodId !== f.id);
-      S.routines.forEach((r) => { r.items = r.items.filter((x) => x.foodId !== f.id); });
-      return commit(`${eul(f.name)} 지웠어요`, true);
-    }
-    case "hide-all-defaults": {
-      snapshot();
-      const ids = DEFAULT_FOODS.map((f) => f.id);
-      S.hiddenDefaults = ids;
-      const keep = (x) => !ids.includes(x.foodId);
-      S.today.items = S.today.items.filter(keep);
-      S.lastItems = S.lastItems.filter(keep);
-      S.routines.forEach((r) => { r.items = r.items.filter(keep); });
-      if (ui.filter === "default") ui.filter = "all";
-      return commit("기본 식품을 모두 지웠어요", true);
-    }
-    case "restore-defaults": S.hiddenDefaults = []; return commit("기본 식품을 되살렸어요");
     case "del-food": {
       const f = S.customFoods.find((x) => x.id === b.dataset.id);
       if (!f) return;
@@ -1570,8 +1577,9 @@ $app.addEventListener("click", async (e) => {
       const list = ui.modal.draft.workouts;
       const last = list[list.length - 1];
       let start = "17:00";
-      if (last && last.start) { const m = Math.min(parseTime(last.start) + (Number(last.duration) || 60) + 120, 23 * 60); start = fmtTime(m - (m % 5)); }
-      list.push({ id: newId(), start, duration: 60 });
+      if (last && last.end) { const m = Math.min(parseTime(last.end) + 120, 22 * 60); start = fmtTime(m - (m % 5)); }
+      const e = Math.min(parseTime(start) + 60, 23 * 60 + 55);
+      list.push({ id: newId(), start, end: fmtTime(e) });
       render();
       [...document.querySelectorAll(".wo-start")].pop()?.focus();
       return;
@@ -1662,7 +1670,7 @@ $app.addEventListener("click", async (e) => {
       readProgramForm();
       const d = ui.modal.draft;
       const n = Math.max(1, Math.min(7, d.splits.length + Number(b.dataset.d)));
-      while (d.splits.length < n) d.splits.push({ name: "", parts: [], memo: "" });
+      while (d.splits.length < n) d.splits.push({ parts: [], ex: [newEx()] });
       d.splits.length = n;
       d.sched = d.sched.map((v) => (v < n ? v : -1));
       return render();
@@ -1674,13 +1682,42 @@ $app.addEventListener("click", async (e) => {
       sp.parts = sp.parts.includes(p) ? sp.parts.filter((x) => x !== p) : cleanParts([...sp.parts, p]);
       return render();
     }
+    case "pg-ex-add": {
+      readProgramForm();
+      const sp = ui.modal.draft.splits[i]; if (!sp || sp.ex.length >= 15) return;
+      sp.ex.push(newEx()); render();
+      document.querySelector(`.ex-row[data-i="${i}"][data-j="${sp.ex.length - 1}"] .ex-n`)?.focus();
+      return;
+    }
+    case "pg-ex-del": {
+      readProgramForm();
+      const sp = ui.modal.draft.splits[i]; if (!sp) return;
+      sp.ex.splice(Number(b.dataset.j), 1); return render();
+    }
+    case "pg-ex-bw": {
+      readProgramForm();
+      const e = ui.modal.draft.splits[i]?.ex[Number(b.dataset.j)]; if (!e) return;
+      e.w = e.w === null ? "" : null; return render();
+    }
     case "pg-save": {
       readProgramForm();
-      const prog = cleanProgram(ui.modal.draft);
+      const d = ui.modal.draft;
       const err = document.getElementById("pg-err");
+      // 빈 운동 줄은 버리고, 이름을 쓴 줄은 숫자를 확인
+      for (const [i2, sp] of d.splits.entries()) {
+        sp.ex = sp.ex.filter((e) => String(e.n).trim() || (e.w !== null && String(e.w) !== ""));
+        for (const e of sp.ex) {
+          const where = `${i2 + 1}일차 ${String(e.n).trim() || "운동"}`;
+          if (!String(e.n).trim()) { err.textContent = `${i2 + 1}일차에 이름이 없는 운동이 있어요.`; return; }
+          if (e.w !== null && !(Number(e.w) > 0)) { err.textContent = `${where}: 무게를 적거나 맨몸을 골라 주세요.`; return; }
+          if (!(Number(e.r) >= 1)) { err.textContent = `${where}: 개수를 적어 주세요.`; return; }
+          if (!(Number(e.s) >= 1)) { err.textContent = `${where}: 세트 수를 적어 주세요.`; return; }
+        }
+      }
+      const prog = cleanProgram(d);
       if (!prog) { err.textContent = "분할을 하나 이상 만들어 주세요."; return; }
       const empty = prog.splits.findIndex((x) => !x.parts.length);
-      if (empty >= 0) { err.textContent = `${empty + 1}일차에 운동할 부위를 하나 이상 골라 주세요.`; return; }
+      if (empty >= 0) { err.textContent = `${empty + 1}일차에 운동할 부위를 골라 주세요.`; return; }
       S.program = prog;
       ui.modal = null;
       return commit("운동법을 저장했어요");
@@ -1704,10 +1741,9 @@ $app.addEventListener("click", async (e) => {
       if (!(weight >= 25 && weight <= 200)) { err.textContent = "몸무게를 25–200kg 사이로 적어 주세요."; return; }
       const workouts = [];
       for (const [n, w] of d.workouts.entries()) {
-        const dur = Number(w.duration);
-        if (!w.start || parseTime(w.start) < 8 * 60) { err.textContent = `${n + 1}번째 운동의 시작 시간을 08:00 이후로 골라 주세요.`; return; }
-        if (!(dur >= 5 && dur <= 480)) { err.textContent = `${n + 1}번째 운동의 길이를 5–480분 사이로 적어 주세요.`; return; }
-        workouts.push({ id: w.id, start: w.start, duration: Math.round(dur) });
+        if (!w.start || !w.end) { err.textContent = `${n + 1}번째 운동의 시작과 끝 시간을 골라 주세요.`; return; }
+        if (parseTime(w.end) <= parseTime(w.start)) { err.textContent = `${n + 1}번째 운동의 끝 시간이 시작보다 늦어야 해요.`; return; }
+        workouts.push({ id: w.id, start: w.start, end: w.end });
       }
       workouts.sort((a, b) => parseTime(a.start) - parseTime(b.start));
       const cf = parseFloat(d.customFactor);
@@ -1716,6 +1752,9 @@ $app.addEventListener("click", async (e) => {
       S.nickname = d.nick.trim() || S.nickname;
       const shareChanged = S.shareProgress !== d.share || S.shareDetail !== (d.share && d.detail);
       S.shareProgress = d.share;
+      if (S.showFriends !== d.showFriends) setTimeout(watchFriends, 0);
+      S.showFriends = d.showFriends;
+      S.showPlan = d.showPlan;
       S.cutoff = d.cutoff || null;
       S.shareDetail = d.share && d.detail;
       if (shareChanged) setTimeout(watchFriends, 0);
@@ -1786,7 +1825,7 @@ function tick() {
     return;
   }
   const plan = document.getElementById("plan");
-  if (plan && !ui.modal) plan.innerHTML = planHTML();
+  if (plan && !ui.modal) plan.outerHTML = planBlockHTML();
 }
 setInterval(tick, 30000);
 document.addEventListener("visibilitychange", () => {
