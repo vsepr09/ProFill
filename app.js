@@ -9,9 +9,9 @@ import {
   collection, getDocs, query, where, onSnapshot, getDocFromCache,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 import { firebaseConfig } from "./firebase-config.js";
-import { GOALS, KINDS } from "./data.js?v=1.3.1";
+import { GOALS, KINDS } from "./data.js?v=1.3.2";
 
-const APP_VERSION = "1.3.1";
+const APP_VERSION = "1.3.2";
 /* ---------- Firebase ---------- */
 const fbApp = initializeApp(firebaseConfig);
 const auth = getAuth(fbApp);
@@ -662,6 +662,8 @@ function cleanProgram(p) {
   });
   return { name: str(p.name, 20).trim(), splits, sched };
 }
+// 분할 이름은 운동 부위로 (부위를 아직 안 골랐으면 순서로)
+const splitName = (sp, i) => (sp?.parts?.length ? sp.parts.join("·") : `분할 ${i + 1}`);
 const exText = (e) => `${e.w == null ? "맨몸" : `${fmtG(e.w)}kg`} · ${e.r}회 · ${e.s}세트`;
 const exListHTML = (ex) => (ex.length ? `<ul class="ex-list">${ex.map((e) => `<li><span>${esc(e.n)}</span><span>${exText(e)}</span></li>`).join("")}</ul>` : "");
 // 운동법이 있으면 운동법에 들어 있는 부위만 보여 줌 (오늘 이미 체크한 부위는 함께)
@@ -759,7 +761,7 @@ function quickAdds() {
   };
   if (prog) {
     const order = plan?.split ? [plan.i, ...prog.splits.map((_, i) => i).filter((i) => i !== plan.i)] : prog.splits.map((_, i) => i);
-    order.forEach((i) => push(`split:${i}`, i === plan?.i ? "운동법대로" : `${i + 1}일차 운동`, prog.splits[i].ex));
+    order.forEach((i) => push(`split:${i}`, i === plan?.i ? "운동법대로" : splitName(prog.splits[i], i), prog.splits[i].ex));
   }
   const keys = Object.keys(S.history).filter((k) => k < S.today.date).sort().reverse();
   for (const p of todayParts()) {
@@ -803,7 +805,7 @@ function workoutHTML() {
   }
   const parts = todayParts();
   const plan = todayPlan();
-  const badge = plan?.split ? `<span class="day-pill">${plan.i + 1}일차</span>` : `<span class="day-pill rest">휴식</span>`;
+  const badge = plan?.split ? `<span class="day-pill">${esc(splitName(plan.split, plan.i))}</span>` : `<span class="day-pill rest">휴식</span>`;
   const missing = plan?.split ? plan.split.parts.filter((p) => !parts.includes(p)) : [];
   const planBtn = missing.length ? `<button class="chip" data-act="parts-plan">계획대로 체크 <span>${missing.join(", ")}</span></button>` : "";
   const planned = plan?.split?.parts || [];
@@ -848,7 +850,7 @@ function targetsOf(n) {
   const out = [];
   prog.splits.forEach((sp, i) => sp.ex.forEach((e) => {
     if (e.n !== n) return;
-    const label = sp.parts.length ? sp.parts.join("·") : `${i + 1}일차`;
+    const label = splitName(sp, i);
     const had = out.find((t) => sameT(t, e));
     if (had) { if (!had.labels.includes(label)) had.labels.push(label); return; }
     out.push({ ...e, labels: [label] });
@@ -1079,7 +1081,7 @@ function programHTML() {
   const n = d.splits.length;
   const splits = d.splits.map((sp, i) => `
     <div class="pg-split">
-      <span class="pg-badge">${i + 1}일차</span>
+      <span class="pg-badge ${sp.parts.length ? "" : "empty"}">${sp.parts.length ? sp.parts.join("·") : "부위를 골라 주세요"}</span>
       <div class="parts small-parts">${PARTS.map((p) => `<button class="part ${sp.parts.includes(p) ? "on" : ""}" data-act="pg-part" data-i="${i}" data-p="${p}" aria-pressed="${sp.parts.includes(p)}"><span class="pn">${p}</span></button>`).join("")}</div>
       ${sp.ex.map((e, j) => exRowHTML(e, i, j)).join("")}
       <button class="btn ghost small left" data-act="pg-ex-add" data-i="${i}">운동 추가</button>
@@ -1087,7 +1089,7 @@ function programHTML() {
   const days = WEEK.map((w, wi) => `
     <label class="pg-dayrow"><span>${w}</span><select class="pg-day" data-w="${wi}">
       <option value="-1" ${d.sched[wi] === -1 ? "selected" : ""}>휴식</option>
-      ${d.splits.map((sp, i) => `<option value="${i}" ${d.sched[wi] === i ? "selected" : ""}>${i + 1}일차</option>`).join("")}
+      ${d.splits.map((sp, i) => `<option value="${i}" ${d.sched[wi] === i ? "selected" : ""}>${esc(splitName(sp, i))}</option>`).join("")}
     </select></label>`).join("");
   return `<h2>나의 운동법</h2>
     <div class="form">
@@ -1104,10 +1106,11 @@ function programHTML() {
 function programViewHTML(prog) {
   const sched = WEEK.map((w, wi) => {
     const i = prog.sched[wi];
-    return `<span class="pv-day ${i < 0 ? "rest" : ""}"><b>${w}</b>${i < 0 ? "휴식" : `${i + 1}일차`}</span>`;
+    const sp = prog.splits[i];
+    return `<span class="pv-day ${i < 0 ? "rest" : ""}"><b>${w}</b>${i < 0 ? "<span>휴식</span>" : (sp.parts.length ? sp.parts : [`분할 ${i + 1}`]).map((p) => `<span>${p}</span>`).join("")}</span>`;
   }).join("");
   const splits = prog.splits.map((sp, i) => `
-    <li><div class="pv-head"><span class="pg-badge">${i + 1}일차</span><span class="pv-parts">${sp.parts.join(", ") || "부위 없음"}</span></div>
+    <li><div class="pv-head"><span class="pg-badge">${esc(splitName(sp, i))}</span></div>
       ${exListHTML(sp.ex)}</li>`).join("");
   return `<div class="pv"><p class="pv-title">${esc(prog.name || `${prog.splits.length}분할`)}</p>
     <div class="pv-week">${sched}</div><ul class="pv-splits">${splits}</ul></div>`;
@@ -1503,14 +1506,18 @@ function friendHTML() {
     ? `<ul class="cal-foods">${dt.foods.map(foodPair).map(([n, g]) => `<li><span>${esc(n)}</span><span>${fmtG(g)}g</span></li>`).join("")}</ul>`
     : `<p class="muted small">아직 오늘 먹은 식품이 없어요.</p>`;
   return `${top}
-    ${dt.weight ? `<div class="fd-profile">
-      <div><span>몸무게</span><b>${dt.weight}kg</b></div>
-      <div><span>목표</span><b>${esc(dt.goal || "")}</b><small>1kg당 ${dt.factor}g</small></div>
-    </div>` : ""}
+    <h3>최근 7일</h3>
+    <div class="week fd-week">${week}</div>
+    <h3>오늘 먹은 식품</h3>
     <div class="fd-today">
       <p class="cal-sum"><b>${fmtG(dt.e)}g</b> / ${dt.t}g <span class="${f.pct >= 100 ? "ok" : ""}">${f.pct}%</span></p>
       <div class="fd-bar"><i style="width:${Math.min(100, f.pct)}%"></i></div>
     </div>
+    ${foods}
+    ${dt.weight ? `<div class="fd-profile">
+      <div><span>몸무게</span><b>${dt.weight}kg</b></div>
+      <div><span>목표</span><b>${esc(dt.goal || "")}</b><small>1kg당 ${dt.factor}g</small></div>
+    </div>` : ""}
     <div class="cal-stats two">
       <div><span>지금 연속</span><b>${f.streak || 0}일</b></div>
       <div><span>최고 연속</span><b>${dt.best || 0}일</b></div>
@@ -1518,10 +1525,6 @@ function friendHTML() {
     ${dt.parts?.length ? `<h3>오늘 운동한 부위</h3><p class="cal-parts">${dt.parts.map((x) => `<span class="pchip">${x}</span>`).join("")}</p>` : ""}
     ${dt.ex?.length ? `<h3>오늘 한 운동</h3>${exListHTML(dt.ex)}` : ""}
     ${dt.program ? `<h3>운동법</h3>${programViewHTML(dt.program)}` : ""}
-    <h3>최근 7일</h3>
-    <div class="week fd-week">${week}</div>
-    <h3>오늘 먹은 식품</h3>
-    ${foods}
     ${close}`;
 }
 
@@ -2138,8 +2141,8 @@ $app.addEventListener("click", async (e) => {
       for (const [i2, sp] of d.splits.entries()) {
         sp.ex = sp.ex.filter((e) => String(e.n).trim() || (e.w !== null && String(e.w) !== ""));
         for (const e of sp.ex) {
-          const where = `${i2 + 1}일차 ${String(e.n).trim() || "운동"}`;
-          if (!String(e.n).trim()) { err.textContent = `${i2 + 1}일차에 이름이 없는 운동이 있어요.`; return; }
+          const where = `${splitName(sp, i2)} ${String(e.n).trim() || "운동"}`;
+          if (!String(e.n).trim()) { err.textContent = `${splitName(sp, i2)}에 이름이 없는 운동이 있어요.`; return; }
           if (e.w !== null && !(Number(e.w) > 0)) { err.textContent = `${where}: 무게를 적거나 맨몸을 골라 주세요.`; return; }
           if (!(Number(e.r) >= 1)) { err.textContent = `${where}: 개수를 적어 주세요.`; return; }
           if (!(Number(e.s) >= 1)) { err.textContent = `${where}: 세트 수를 적어 주세요.`; return; }
@@ -2148,7 +2151,7 @@ $app.addEventListener("click", async (e) => {
       const prog = cleanProgram(d);
       if (!prog) { err.textContent = "분할을 하나 이상 만들어 주세요."; return; }
       const empty = prog.splits.findIndex((x) => !x.parts.length);
-      if (empty >= 0) { err.textContent = `${empty + 1}일차에 운동할 부위를 골라 주세요.`; return; }
+      if (empty >= 0) { err.textContent = `${empty + 1}번째 분할에 운동할 부위를 골라 주세요.`; return; }
       S.program = prog;
       ui.modal = null;
       return commit("운동법을 저장했어요");
