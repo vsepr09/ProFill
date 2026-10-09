@@ -9,9 +9,9 @@ import {
   collection, getDocs, query, where, onSnapshot, getDocFromCache,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 import { firebaseConfig } from "./firebase-config.js";
-import { GOALS, KINDS } from "./data.js?v=1.3.0";
+import { GOALS, KINDS } from "./data.js?v=1.3.1";
 
-const APP_VERSION = "1.3.0";
+const APP_VERSION = "1.3.1";
 /* ---------- Firebase ---------- */
 const fbApp = initializeApp(firebaseConfig);
 const auth = getAuth(fbApp);
@@ -648,7 +648,11 @@ function cleanProgram(p) {
   if (!p || typeof p !== "object" || !Array.isArray(p.splits) || !p.splits.length) return null;
   const splits = p.splits.slice(0, 7).map((x) => ({
     parts: cleanParts(x?.parts),
-    ex: (Array.isArray(x?.ex) ? x.ex : []).slice(0, 15).map(cleanEx).filter(Boolean),
+    ex: (Array.isArray(x?.ex) ? x.ex : []).slice(0, 15).map((e) => {
+      const c = cleanEx(e);
+      if (c && c.w != null && e.lo != null) c.lo = Math.round(num(e.lo, 1, 999));   // 개수부터 늘릴 때 처음 개수
+      return c;
+    }).filter(Boolean),
   }));
   const sched = Array.from({ length: 7 }, (_, i) => {
     const raw = Number(p.sched?.[i]);
@@ -835,7 +839,22 @@ function sessionsBy() {
   return by;
 }
 const progEx = (n) => cleanProgram(S.program)?.splits.flatMap((sp) => sp.ex).find((x) => x.n === n) || null;
-// 계획한 세트와 개수, 무게를 다 채웠는지
+// 오늘 분할에 있는 운동을 먼저 찾음
+const progExToday = (n) => todayPlan()?.split?.ex.find((x) => x.n === n) || progEx(n);
+const sameT = (a, b) => a.w === b.w && a.r === b.r && a.s === b.s;
+// 같은 운동이라도 분할마다 목표가 다르면 따로 봄: [{ w, r, s, lo, label }]
+function targetsOf(n) {
+  const prog = cleanProgram(S.program); if (!prog) return [];
+  const out = [];
+  prog.splits.forEach((sp, i) => sp.ex.forEach((e) => {
+    if (e.n !== n) return;
+    const label = sp.parts.length ? sp.parts.join("·") : `${i + 1}일차`;
+    const had = out.find((t) => sameT(t, e));
+    if (had) { if (!had.labels.includes(label)) had.labels.push(label); return; }
+    out.push({ ...e, labels: [label] });
+  }));
+  return out.map(({ labels, ...t }) => ({ ...t, label: labels.join(", ") }));
+}
 // 그날의 목표(세트, 개수, 무게)를 다 채웠는지. 목표가 없던 예전 기록은 세트만 봄
 function complete(x) {
   if (!x.t || x.s < x.t) return false;
@@ -848,28 +867,52 @@ function atTarget(x, tg) {
   if (x.tr !== undefined) return x.tr === tg.r && (x.tw ?? null) === (tg.w ?? null);
   return tg.w == null ? x.r >= tg.r - 1 : (x.w ?? 0) >= tg.w;   // 예전 기록
 }
-// 다음 목표: 지금 목표로 두 번 연속 다 채우면 올리고, 지금 목표로 세 번 연속 못 채우면 10% 내리기
-function overload(n, all) {
-  const tg = progEx(n);
+const LIGHT = 20;      // 이 무게보다 가벼우면 개수부터 늘림
+const REP_RANGE = 4;   // 처음 개수 + 4회까지
+const GAP = 14;        // 이만큼(일) 넘게 쉬면 다시 시작
+const dayN = (k) => Math.round(keyToUTC(k) / 864e5);
+// 다음 목표: 지금 목표로 두 번 연속 다 채우면 올리고, 세 번 연속 못 채우면 내림
+function overload(all, tg) {
   let ss = all;
   const lastAll = ss[ss.length - 1];
   if (lastAll.k === S.today.date && !complete(lastAll)) ss = ss.slice(0, -1);   // 오늘 하는 중인 운동은 빼기
-  const base = tg || { w: lastAll.w, r: lastAll.r, s: lastAll.t || lastAll.s };
+  const base = tg ? { w: tg.w, r: tg.r, s: tg.s, ...(tg.lo != null ? { lo: tg.lo } : {}) } : { w: lastAll.w, r: lastAll.r, s: lastAll.t || lastAll.s };
   const bw = base.w == null;
+  const hold = (why) => ({ kind: "hold", ...base, why });
+  const prev = ss[ss.length - 1];
+  if (prev && dayN(S.today.date) - dayN(prev.k) > GAP) return hold("오랜만이에요. 지금 목표로 다시 시작해요");
+  // 지금 목표로 한 기록만, 오래 쉬기 전 기록은 빼고
   const cur = ss.filter((x) => atTarget(x, tg));
-  const recent = cur.slice(-3);
+  let st = 0;
+  for (let i = 1; i < cur.length; i++) if (dayN(cur[i].k) - dayN(cur[i - 1].k) > GAP) st = i;
+  const recent = cur.slice(st).slice(-3);
   const ok = recent.map(complete);
+  const light = !bw && (base.w || 0) < LIGHT;
+  const lo = Math.min(base.lo ?? base.r, base.r), top = lo + REP_RANGE;
   if (ok.length >= 2 && ok[ok.length - 1] && ok[ok.length - 2]) {
-    return bw ? { kind: "up", w: null, r: base.r + 1, s: base.s, why: "두 번 연속 목표를 채웠어요" }
-      : { kind: "up", w: round25((base.w || 0) + W_STEP), r: base.r, s: base.s, why: "두 번 연속 목표를 채웠어요" };
+    const why = "두 번 연속 목표를 채웠어요";
+    if (bw) return { kind: "up", w: null, r: base.r + 1, s: base.s, why };
+    if (light && base.r < top) return { kind: "up", w: base.w, r: base.r + 1, s: base.s, lo, why: `개수부터 늘려요 (${top}회까지)` };
+    if (light) return { kind: "up", w: round25(base.w + W_STEP), r: lo, s: base.s, lo, why: `${top}회를 채워서 무게를 올려요` };
+    return { kind: "up", w: round25(base.w + W_STEP), r: base.r, s: base.s, why };
   }
   if (ok.length === 3 && !ok.some(Boolean)) {
-    return bw ? { kind: "down", w: null, r: Math.max(1, base.r - 2), s: base.s, why: "세 번 연속 목표에 못 미쳤어요" }
-      : { kind: "down", w: round25((base.w || 0) * 0.9), r: base.r, s: base.s, why: "세 번 연속 목표에 못 미쳤어요" };
+    const why = "세 번 연속 목표에 못 미쳤어요";
+    if (bw) return { kind: "down", w: null, r: Math.max(1, base.r - 2), s: base.s, why };
+    if (light && base.r > lo) return { kind: "down", w: base.w, r: lo, s: base.s, lo, why };
+    let w2 = round25(base.w * 0.9);
+    if (w2 >= base.w) w2 = Math.max(0, r1(base.w - W_STEP));
+    return { kind: "down", w: w2, r: base.r, s: base.s, ...(light ? { lo } : {}), why };
   }
-  if (!recent.length) return { kind: "hold", ...base, why: "새 목표로 시작해요" };
+  if (!recent.length) return hold("새 목표로 시작해요");
   if (ok[ok.length - 1]) return { kind: "near", ...base, why: "한 번 더 채우면 올려요" };
-  return { kind: "hold", ...base, why: "이번 목표를 먼저 채워요" };
+  return hold("이번 목표를 먼저 채워요");
+}
+// 운동별 다음 목표 (분할마다 목표가 다르면 여러 개)
+function nextsOf(n, ss) {
+  const tgs = targetsOf(n);
+  if (!tgs.length) return [{ tg: null, nx: overload(ss, null), label: "" }];
+  return tgs.map((tg) => ({ tg, nx: overload(ss, tg), label: tgs.length > 1 ? tg.label : "" }));
 }
 function exStats() {
   recordToday();
@@ -879,13 +922,19 @@ function exStats() {
     const bw = ss[ss.length - 1].w == null;
     const metric = (x) => (bw ? x.r * x.s : e1rm(x.w, x.r));          // 맨몸은 총 개수, 무게는 추정 1RM
     const last = ss[ss.length - 1];
-    const base = ss.find((x) => keyToUTC(x.k) >= today - 28 * 864e5) || ss[0];
-    const m0 = metric(base), m1 = metric(last);
+    // 4주 안의 첫 기록과 비교. 4주 안에 한 번뿐이면 그 직전 기록과 비교
+    let bi = ss.findIndex((x) => keyToUTC(x.k) >= today - 28 * 864e5);
+    if (bi < 0) bi = 0;
+    else if (bi === ss.length - 1 && bi > 0) bi -= 1;
+    const base = ss[bi];
+    // 최근 값은 마지막 기록 앞 일주일 중 가장 좋은 기록 (무거운 날, 가벼운 날이 섞여도 하락으로 안 보이게)
+    const wk = ss.slice(bi + 1).filter((x) => keyToUTC(x.k) >= keyToUTC(last.k) - 6 * 864e5);
+    const m0 = metric(base), m1 = wk.length ? Math.max(...wk.map(metric)) : metric(last);
     const change = ss.length > 1 && m0 ? (m1 - m0) / m0 : null;
     let best = 0, prs = 0;
     ss.forEach((x) => { const m = metric(x); if (m > best) { if (best && keyToUTC(x.k) >= today - 30 * 864e5) prs++; best = m; } });
     const status = ss.length < 2 ? "new" : change > 0.02 ? "up" : change < -0.02 ? "down" : "flat";
-    return { n, ss, bw, last, best, m1, change, prs, status, next: overload(n, ss) };
+    return { n, ss, bw, last, best, m1, change, prs, status, nexts: nextsOf(n, ss) };
   }).sort((a, b) => (a.last.k < b.last.k ? 1 : a.last.k > b.last.k ? -1 : a.n.localeCompare(b.n)));
 }
 // 주별 볼륨 (무게 × 개수 × 세트, 최근 6주)
@@ -894,7 +943,11 @@ function weeklyVolume() {
   for (let w = -5; w <= 0; w++) {
     const days = weekRange(w);
     let v = 0;
-    days.forEach((k) => (S.history[k]?.ex || []).forEach((raw) => { const c = cleanEx(raw); if (c && c.w) v += c.w * c.r * c.s; }));
+    days.forEach((k) => (S.history[k]?.ex || []).forEach((raw) => {
+      const c = cleanEx(raw); if (!c) return;
+      const w = c.w == null ? S.weight || 0 : c.w;   // 맨몸은 몸무게로 계산
+      v += w * c.r * c.s;
+    }));
     out.push({ k: days[0], v });
   }
   return out;
@@ -919,7 +972,7 @@ const NEXT = { up: "증량", down: "감량", near: "유지", hold: "유지" };
 function exStatsHTML() {
   const list = exStats();
   const close = `<div class="modal-actions"><button class="btn primary" data-act="close-modal">닫기</button></div>`;
-  const auto = `<label class="switch-row es-auto"><span><b>운동법 자동으로 올리기</b><small>두 번 연속 목표를 채우면 다음 날 무게(맨몸은 개수)를 올려요</small></span>
+  const auto = `<label class="switch-row es-auto"><span><b>운동법 자동으로 올리기</b><small>두 번 연속 목표를 채우면 다음 날 목표를 올려요</small></span>
       <input type="checkbox" role="switch" class="switch" id="s-auto" ${S.autoProgress ? "checked" : ""}></label>`;
   if (!list.length) return `<h2>운동 분석</h2>${auto}<p class="muted">아직 기록한 세트가 없어요.</p>${close}`;
   const wv = weeklyVolume();
@@ -932,9 +985,11 @@ function exStatsHTML() {
     const [label, cls] = STATUS[x.status];
     const d = new Date(keyToUTC(x.last.k));
     const series = x.ss.slice(-10).map((s) => (x.bw ? s.r * s.s : e1rm(s.w, s.r)));
-    const nx = x.next;
-    const tg = progEx(x.n);
-    const same = tg && tg.w === nx.w && tg.r === nx.r && tg.s === nx.s;
+    const nexts = x.nexts.map(({ tg, nx, label }, i) => `
+      <div class="es-next ${nx.kind}">
+        <div><small>${label ? `${esc(label)} · ` : ""}다음 목표 · ${NEXT[nx.kind]}</small><b>${wLabel(nx.w)} · ${nx.r}회 · ${nx.s}세트</b><span>${nx.why}</span></div>
+        ${tg && !sameT(tg, nx) && (nx.kind === "up" || nx.kind === "down") ? `<button class="btn small" data-act="apply-next" data-n="${esc(x.n)}" data-i="${i}">운동법에 반영</button>` : ""}
+      </div>`).join("");
     return `<li>
       <div class="es-top"><b>${esc(x.n)}</b><span class="badge-s ${cls}">${label}</span>${x.change != null ? `<span class="es-chg ${x.change > 0 ? "up" : x.change < 0 ? "down" : ""}">${pct(x.change)}</span>` : ""}</div>
       <div class="es-mid">
@@ -942,10 +997,7 @@ function exStatsHTML() {
         ${sparkSVG(series)}
       </div>
       <p class="es-last">${d.getUTCMonth() + 1}/${d.getUTCDate()} · ${wLabel(x.last.w)} · ${x.last.r}회 · ${x.last.s}${x.last.t ? `/${x.last.t}` : ""}세트</p>
-      <div class="es-next ${nx.kind}">
-        <div><small>다음 목표 · ${NEXT[nx.kind]}</small><b>${wLabel(nx.w)} · ${nx.r}회 · ${nx.s}세트</b><span>${nx.why}</span></div>
-        ${tg && !same && (nx.kind === "up" || nx.kind === "down") ? `<button class="btn small" data-act="apply-next" data-n="${esc(x.n)}">운동법에 반영</button>` : ""}
-      </div></li>`;
+      ${nexts}</li>`;
   }).join("");
   return `<h2>운동 분석</h2>
     <div class="cal-stats">
@@ -957,24 +1009,33 @@ function exStatsHTML() {
     ${auto}
     <ul class="es-list">${cards}</ul>${close}`;
 }
-// 운동법에 다음 목표 반영
-function applyNext(n, nx) {
+// 운동법에 다음 목표 반영: changes = [{ n, from 지금 목표, nx 다음 목표 }]. 한 번에 바꿔서 서로 섞이지 않게 함
+function applyNext(changes) {
   const prog = cleanProgram(S.program); if (!prog) return false;
   let hit = false;
-  prog.splits.forEach((sp) => sp.ex.forEach((e) => { if (e.n === n) { e.w = nx.w; e.r = nx.r; e.s = nx.s; hit = true; } }));
+  prog.splits.forEach((sp) => sp.ex.forEach((e) => {
+    const c = changes.find((c) => c.n === e.n && sameT(e, c.from));
+    if (!c) return;
+    e.w = c.nx.w; e.r = c.nx.r; e.s = c.nx.s;
+    if (c.nx.lo != null) e.lo = c.nx.lo; else delete e.lo;
+    hit = true;
+  }));
   if (hit) S.program = prog;
   return hit;
 }
 // 자동으로 올리기: 증량만 자동으로
 function autoProgress() {
   if (!S.autoProgress || !cleanProgram(S.program)) return [];
-  const by = sessionsBy(), done = [];
+  const by = sessionsBy(), changes = [], done = [];
   for (const [n, ss] of Object.entries(by)) {
-    if (!progEx(n)) continue;
-    const nx = overload(n, ss);
-    if (nx.kind === "up" && applyNext(n, nx)) done.push(`${n} ${wLabel(nx.w)} × ${nx.r}회`);
+    for (const { tg, nx } of nextsOf(n, ss)) {
+      if (!tg || nx.kind !== "up" || sameT(tg, nx)) continue;
+      changes.push({ n, from: tg, nx });
+      const t = `${n} ${wLabel(nx.w)} × ${nx.r}회`;
+      if (!done.includes(t)) done.push(t);
+    }
   }
-  return done;
+  return changes.length && applyNext(changes) ? done : [];
 }
 
 /* 나의 운동법 편집 */
@@ -993,7 +1054,9 @@ function readProgramForm() {
     if (!e) return;
     e.n = row.querySelector(".ex-n").value;
     if (e.w !== null) e.w = row.querySelector(".ex-w")?.value ?? e.w;
-    e.r = row.querySelector(".ex-r").value;
+    const r = row.querySelector(".ex-r").value;
+    if (String(r) !== String(e.r)) delete e.lo;   // 개수를 직접 바꾸면 그 개수부터 다시 셈
+    e.r = r;
     e.s = row.querySelector(".ex-s").value;
   });
   d.sched = WEEK.map((_, w) => Number(document.querySelector(`.pg-day[data-w="${w}"]`)?.value ?? d.sched[w]));
@@ -1988,7 +2051,7 @@ $app.addEventListener("click", async (e) => {
     case "lx-quick": {
       const q = quickAdds().find((x) => x.key === b.dataset.k); if (!q) return;
       syncTodayEx();
-      q.list.forEach((e) => { const tg = progEx(e.n); S.today.ex.push({ id: newId(), n: e.n, w: e.w, r: e.r || 10, s: Math.max(1, e.s || 3), done: 0, ...(tg ? { tw: tg.w, tr: tg.r } : {}) }); });
+      q.list.forEach((e) => { const tg = progExToday(e.n); S.today.ex.push({ id: newId(), n: e.n, w: e.w, r: e.r || 10, s: Math.max(1, e.s || 3), done: 0, ...(tg ? { tw: tg.w, tr: tg.r } : {}) }); });
       return commit(`${q.list.length}개 운동을 추가했어요`);
     }
     case "lx-add": ui.lxAdd = true; render(); document.getElementById("lx-name")?.focus(); return;
@@ -1997,8 +2060,8 @@ $app.addEventListener("click", async (e) => {
       const n = val("lx-name").trim(); if (!n) return;
       syncTodayEx();
       // 운동법에 같은 이름이 있으면 그 무게와 개수를 가져옴
-      const tpl = progEx(n) || lastOf(n);
-      const ptg = progEx(n);
+      const ptg = progExToday(n);
+      const tpl = ptg || lastOf(n);
       S.today.ex.push({ id: newId(), n: n.slice(0, 30), w: tpl ? tpl.w : 0, r: tpl?.r || 10, s: tpl?.s || 3, done: 0, ...(ptg ? { tw: ptg.w, tr: ptg.r } : {}) });
       ui.lxAdd = false;
       return commit();
@@ -2006,9 +2069,10 @@ $app.addEventListener("click", async (e) => {
     case "go-add": ui.addOpen = true; ui.editingFood = null; render(); document.getElementById("af-name")?.scrollIntoView({ block: "center" }); document.getElementById("af-name")?.focus(); return;
     case "apply-next": {
       const n = b.dataset.n;
-      const x = exStats().find((y) => y.n === n); if (!x) return;
+      const x = exStats().find((y) => y.n === n);
+      const it = x?.nexts[Number(b.dataset.i) || 0]; if (!it?.tg) return;
       snapshot();
-      if (applyNext(n, x.next)) return commit(`${n}: ${wLabel(x.next.w)} × ${x.next.r}회 × ${x.next.s}세트로 바꿨어요`, true);
+      if (applyNext([{ n, from: it.tg, nx: it.nx }])) return commit(`${n}: ${wLabel(it.nx.w)} × ${it.nx.r}회 × ${it.nx.s}세트로 바꿨어요`, true);
       return;
     }
     case "open-exstats": ui.modal = { type: "exstats" }; return render();

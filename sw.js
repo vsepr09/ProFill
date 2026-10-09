@@ -1,5 +1,5 @@
 // ProFill 서비스 워커: 한 번 열었던 사이트는 인터넷 없이도 열리게 함
-const VERSION = "profill-v1.3.0";
+const VERSION = "profill-v1.3.1";
 const SHELL = [
   "./", "./index.html", "./app.js", "./style.css", "./data.js", "./firebase-config.js",
   "./manifest.webmanifest", "./icon-192.png", "./icon-512.png", "./apple-touch-icon.png",
