@@ -992,8 +992,8 @@ function programHTML() {
         <label>운동법 이름<input id="pg-name" maxlength="20" value="${esc(d.name)}" placeholder="예: 3분할"></label>
         <div class="pg-n"><span>분할 수</span><div class="stepper"><button data-act="pg-n" data-d="-1" aria-label="분할 줄이기">−</button><span>${n}분할</span><button data-act="pg-n" data-d="1" aria-label="분할 늘리기">+</button></div></div>
       </div>
-      <fieldset><legend>분할별 운동</legend>${splits}</fieldset>
-      <fieldset><legend>요일별 계획</legend><div class="pg-days">${days}</div></fieldset>
+      <div class="fs"><h3 class="fs-title">분할별 운동</h3>${splits}</div>
+      <div class="fs"><h3 class="fs-title">요일별 계획</h3><div class="pg-days">${days}</div></div>
     </div>
     <p class="form-err" id="pg-err"></p>
     <div class="modal-actions">${S.program ? `<button class="btn ghost left-auto danger-text" data-act="pg-clear">운동법 지우기</button>` : ""}<button class="btn ghost" data-act="close-modal">취소</button><button class="btn primary" data-act="pg-save">저장</button></div>`;
@@ -1534,30 +1534,30 @@ function settingsHTML(first) {
         <label>닉네임<input id="s-nick" maxlength="12" value="${esc(d.nick)}"></label>
         <label>몸무게 (kg)<input id="s-weight" type="number" inputmode="decimal" min="25" max="200" step="0.1" value="${esc(d.weight)}" placeholder="예: 65"></label>
       </div>
-      <fieldset><legend>목표</legend><div class="goals">${goals}</div>
-        <button class="link left" data-act="open-info">이 숫자의 근거 보기</button></fieldset>
-      <fieldset><legend>운동 시간</legend>
+      <div class="fs"><h3 class="fs-title">목표</h3><div class="goals">${goals}</div>
+        <button class="link left" data-act="open-info">이 숫자의 근거 보기</button></div>
+      <div class="fs"><h3 class="fs-title">운동 시간</h3>
         ${wo}
-        <button class="btn ghost small left" data-act="wo-add">운동 시간 추가</button></fieldset>
-      <fieldset><legend>기기 사용 마감 시간</legend>
-        <div class="row-cut"><input type="time" id="s-cutoff" step="300" value="${esc(d.cutoff)}" aria-label="기기 사용 마감 시간"><button class="link" data-act="cutoff-clear">사용 안 함</button></div></fieldset>
-      <fieldset><legend>자정이 지나면 체크리스트를</legend>
-        <select id="s-roll">${roll.map(([k, l]) => `<option value="${k}" ${d.rollover === k ? "selected" : ""} ${k === "routine" && !S.routines.length ? "disabled" : ""}>${l}</option>`).join("")}</select></fieldset>
-      <fieldset><legend>화면</legend>
+        <button class="btn ghost small left" data-act="wo-add">운동 시간 추가</button></div>
+      <div class="fs"><h3 class="fs-title">기기 사용 마감 시간</h3>
+        <div class="row-cut"><input type="time" id="s-cutoff" step="300" value="${esc(d.cutoff)}" aria-label="기기 사용 마감 시간"><button class="link" data-act="cutoff-clear">사용 안 함</button></div></div>
+      <div class="fs"><h3 class="fs-title">자정이 지나면 체크리스트를</h3>
+        <select id="s-roll">${roll.map(([k, l]) => `<option value="${k}" ${d.rollover === k ? "selected" : ""} ${k === "routine" && !S.routines.length ? "disabled" : ""}>${l}</option>`).join("")}</select></div>
+      <div class="fs"><h3 class="fs-title">화면</h3>
         <label class="switch-row"><span><b>오늘의 추천</b></span>
           <input type="checkbox" role="switch" class="switch" id="s-plan" ${d.showPlan ? "checked" : ""}></label>
         <label class="switch-row"><span><b>오늘 운동</b></span>
           <input type="checkbox" role="switch" class="switch" id="s-workout" ${d.showWorkout ? "checked" : ""}></label>
         <label class="switch-row"><span><b>오늘 친구들</b></span>
           <input type="checkbox" role="switch" class="switch" id="s-friends" ${d.showFriends ? "checked" : ""}></label>
-      </fieldset>
-      <fieldset><legend>친구</legend>
+      </div>
+      <div class="fs"><h3 class="fs-title">친구</h3>
         <label class="switch-row"><span><b>달성률 공개</b></span>
           <input type="checkbox" role="switch" class="switch" id="s-share" ${d.share ? "checked" : ""}></label>
         <label class="switch-row ${d.share ? "" : "off"}" id="s-detail-row"><span><b>자세한 정보 공개</b></span>
           <input type="checkbox" role="switch" class="switch" id="s-detail" ${d.share && d.detail ? "checked" : ""} ${d.share ? "" : "disabled"}></label>
-      </fieldset>
-      ${first ? "" : `<fieldset class="danger-zone"><legend>계정</legend>
+      </div>
+      ${first ? "" : `<div class="fs danger-zone"><h3 class="fs-title">계정</h3>
         ${d.delStep ? `<p class="small">모든 기록이 지워지고 되돌릴 수 없어요.</p>
           <div class="row-inline"><input type="password" id="del-pw" autocomplete="current-password" placeholder="비밀번호" aria-label="비밀번호">
             <button class="btn danger" data-act="delete-account">영구 삭제</button><button class="btn ghost" data-act="delete-cancel">그만두기</button></div>
@@ -1569,7 +1569,7 @@ function settingsHTML(first) {
           <input type="password" id="pw-new2" autocomplete="new-password" placeholder="새 비밀번호 한 번 더" aria-label="새 비밀번호 확인">
           <div class="row-inline"><button class="btn primary" data-act="pw-change">비밀번호 바꾸기</button><button class="btn ghost" data-act="pw-cancel">그만두기</button></div>
           <p class="form-err" id="pw-err"></p></div>` : ""}
-      </fieldset>`}
+      </div>`}
     </div>
     <p class="form-err" id="s-err"></p>
     <div class="modal-actions">${first ? "" : `<button class="btn ghost" data-act="close-modal">취소</button>`}<button class="btn primary" data-act="save-settings">저장</button></div>`;
