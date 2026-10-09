@@ -9,9 +9,9 @@ import {
   collection, getDocs, query, where, onSnapshot, getDocFromCache,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 import { firebaseConfig } from "./firebase-config.js";
-import { GOALS, KINDS } from "./data.js?v=30";
+import { GOALS, KINDS } from "./data.js?v=1.3.0";
 
-const APP_VERSION = "30";
+const APP_VERSION = "1.3.0";
 /* ---------- Firebase ---------- */
 const fbApp = initializeApp(firebaseConfig);
 const auth = getAuth(fbApp);
@@ -59,6 +59,7 @@ let loadError = false;
 let pendingNick = "";
 let meals = { days: {} };
 let mealsLoaded = false;
+let mealsOk = false;   // 급식 파일을 제대로 받았는지
 let lastFillPct = 0;
 let friends = [];          // 오늘 달성률을 공개한 친구들 (public 컬렉션)
 let friendsState = "idle";
@@ -259,6 +260,14 @@ function ensureToday() {
     items = S.lastItems.map((i) => ({ ...slim(i), eaten: 0 }));
   }
   S.today = { date: k, items, parts: [] };   // ex는 운동법에서 새로 가져옴
+  // 넘겨받은 끼니는 그날 급식이 있으면 급식으로, 없으면 집밥으로 바꿈
+  const seen = new Set();
+  S.today.items = S.today.items.map((it) => {
+    const m = /^(meal|home):([123])$/.exec(it.foodId);
+    if (!m || !mealsOk) return it;   // 급식 파일을 못 받았으면 그대로 둠
+    const id = mealFood(m[2]) ? `meal:${m[2]}` : `home:${m[2]}`;
+    return { ...it, foodId: id, qty: 1 };
+  }).filter((it) => (seen.has(it.foodId) ? false : seen.add(it.foodId)));
   const up = autoProgress();
   if (up.length) autoMsg = `운동법을 올렸어요: ${up.join(", ")}`;
   return true;
@@ -269,7 +278,7 @@ function loadMeals() { mealsReady = fetchMeals(); return mealsReady; }
 async function fetchMeals() {
   try {
     const r = await fetch(`data/meals.json?t=${Date.now()}`, { cache: "no-store" });
-    if (r.ok) meals = await r.json();
+    if (r.ok) { meals = await r.json(); mealsOk = true; }
   } catch (e) { /* 급식 파일이 없어도 나머지는 동작 */ }
   mealsLoaded = true;
   if (S) softRender();
@@ -682,7 +691,10 @@ const cleanLog = (e) => {
   const c = cleanEx(e);
   if (!c) return null;
   const sets = Math.max(1, Math.min(20, c.s || 1));
-  return { id: str(e.id, 20) || newId(), ...c, s: sets, done: Math.min(sets, Math.round(num(e.done, 0, 20))) };
+  const out = { id: str(e.id, 20) || newId(), ...c, s: sets, done: Math.min(sets, Math.round(num(e.done, 0, 20))) };
+  if (e.tw !== undefined) out.tw = e.tw === null ? null : r1(num(e.tw, 0, 500));
+  if (e.tr !== undefined) out.tr = Math.round(num(e.tr, 0, 999));
+  return out;
 };
 function syncTodayEx() {
   const plan = todayPlan();
@@ -691,7 +703,7 @@ function syncTodayEx() {
   const touched = list.some((e) => e.done);
   // 오늘 처음이거나, 아직 한 세트도 안 했는데 운동법이 바뀌었으면 운동법에서 다시 가져옴
   if (!Array.isArray(S.today.ex) || (!touched && S.today.exFrom !== from)) {
-    S.today.ex = from >= 0 ? plan.split.ex.map((e) => ({ id: newId(), ...e, s: Math.max(1, e.s || 1), done: 0 })) : [];
+    S.today.ex = from >= 0 ? plan.split.ex.map((e) => ({ id: newId(), ...e, s: Math.max(1, e.s || 1), done: 0, tw: e.w, tr: e.r })) : [];
     S.today.exFrom = from;
     return S.today.ex;
   }
@@ -699,7 +711,10 @@ function syncTodayEx() {
   return list;
 }
 const logDone = (list) => (list || []).map(cleanLog).filter((e) => e && e.done)
-  .map((e) => ({ n: e.n, w: e.w, r: e.r, s: Math.min(e.done, e.s), t: e.s }));
+  .map((e) => {
+    const tg = e.tr !== undefined ? { w: e.tw ?? null, r: e.tr } : progEx(e.n);   // 그날의 목표
+    return { n: e.n, w: e.w, r: e.r, s: Math.min(e.done, e.s), t: e.s, ...(tg ? { tw: tg.w ?? null, tr: tg.r } : {}) };
+  });
 const wLabel = (w) => (w == null ? "맨몸" : `${fmtG(w)}kg`);
 
 function exLogRowHTML(e, j, yday) {
@@ -812,26 +827,38 @@ function sessionsBy() {
   for (const k of Object.keys(S.history).sort()) {
     for (const raw of S.history[k].ex || []) {
       const c = cleanEx(raw); if (!c || !c.s) continue;
-      (by[c.n] ||= []).push({ k, ...c, t: Math.round(num(raw.t, 0, 20)) || null });
+      const x = { k, ...c, t: Math.round(num(raw.t, 0, 20)) || null };
+      if (raw.tr !== undefined) { x.tr = Math.round(num(raw.tr, 0, 999)); x.tw = raw.tw == null ? null : r1(num(raw.tw, 0, 500)); }
+      (by[c.n] ||= []).push(x);
     }
   }
   return by;
 }
 const progEx = (n) => cleanProgram(S.program)?.splits.flatMap((sp) => sp.ex).find((x) => x.n === n) || null;
 // 계획한 세트와 개수, 무게를 다 채웠는지
-function complete(x, tg) {
+// 그날의 목표(세트, 개수, 무게)를 다 채웠는지. 목표가 없던 예전 기록은 세트만 봄
+function complete(x) {
   if (!x.t || x.s < x.t) return false;
-  if (!tg) return true;
-  return x.r >= tg.r && (tg.w == null || (x.w ?? 0) >= tg.w);
+  if (x.tr === undefined) return true;
+  return x.r >= x.tr && (x.tw == null || (x.w ?? 0) >= x.tw);
 }
-// 다음 목표: 두 번 연속 다 채우면 올리고, 세 번 연속 못 채우면 10% 내리기
-function overload(n, ss) {
+// 지금 목표로 한 세션인지 (목표를 바꾼 뒤의 기록만 보고 판단)
+function atTarget(x, tg) {
+  if (!tg) return true;
+  if (x.tr !== undefined) return x.tr === tg.r && (x.tw ?? null) === (tg.w ?? null);
+  return tg.w == null ? x.r >= tg.r - 1 : (x.w ?? 0) >= tg.w;   // 예전 기록
+}
+// 다음 목표: 지금 목표로 두 번 연속 다 채우면 올리고, 지금 목표로 세 번 연속 못 채우면 10% 내리기
+function overload(n, all) {
   const tg = progEx(n);
-  const last = ss[ss.length - 1];
-  const base = tg || { w: last.w, r: last.r, s: last.t || last.s };
+  let ss = all;
+  const lastAll = ss[ss.length - 1];
+  if (lastAll.k === S.today.date && !complete(lastAll)) ss = ss.slice(0, -1);   // 오늘 하는 중인 운동은 빼기
+  const base = tg || { w: lastAll.w, r: lastAll.r, s: lastAll.t || lastAll.s };
   const bw = base.w == null;
-  const recent = ss.slice(-3);
-  const ok = recent.map((x) => complete(x, tg));
+  const cur = ss.filter((x) => atTarget(x, tg));
+  const recent = cur.slice(-3);
+  const ok = recent.map(complete);
   if (ok.length >= 2 && ok[ok.length - 1] && ok[ok.length - 2]) {
     return bw ? { kind: "up", w: null, r: base.r + 1, s: base.s, why: "두 번 연속 목표를 채웠어요" }
       : { kind: "up", w: round25((base.w || 0) + W_STEP), r: base.r, s: base.s, why: "두 번 연속 목표를 채웠어요" };
@@ -840,6 +867,7 @@ function overload(n, ss) {
     return bw ? { kind: "down", w: null, r: Math.max(1, base.r - 2), s: base.s, why: "세 번 연속 목표에 못 미쳤어요" }
       : { kind: "down", w: round25((base.w || 0) * 0.9), r: base.r, s: base.s, why: "세 번 연속 목표에 못 미쳤어요" };
   }
+  if (!recent.length) return { kind: "hold", ...base, why: "새 목표로 시작해요" };
   if (ok[ok.length - 1]) return { kind: "near", ...base, why: "한 번 더 채우면 올려요" };
   return { kind: "hold", ...base, why: "이번 목표를 먼저 채워요" };
 }
@@ -1584,7 +1612,7 @@ function settingsHTML(first) {
       </div>`}
     </div>
     <p class="form-err" id="s-err"></p>
-    <div class="modal-actions"><span class="app-ver">버전 ${APP_VERSION}</span>${first ? "" : `<button class="btn ghost" data-act="close-modal">취소</button>`}<button class="btn primary" data-act="save-settings">저장</button></div>`;
+    <div class="modal-actions"><span class="app-ver">ProFill v${APP_VERSION}</span>${first ? "" : `<button class="btn ghost" data-act="close-modal">취소</button>`}<button class="btn primary" data-act="save-settings">저장</button></div>`;
 }
 
 function guideHTML() {
@@ -1960,7 +1988,7 @@ $app.addEventListener("click", async (e) => {
     case "lx-quick": {
       const q = quickAdds().find((x) => x.key === b.dataset.k); if (!q) return;
       syncTodayEx();
-      q.list.forEach((e) => S.today.ex.push({ id: newId(), n: e.n, w: e.w, r: e.r || 10, s: Math.max(1, e.s || 3), done: 0 }));
+      q.list.forEach((e) => { const tg = progEx(e.n); S.today.ex.push({ id: newId(), n: e.n, w: e.w, r: e.r || 10, s: Math.max(1, e.s || 3), done: 0, ...(tg ? { tw: tg.w, tr: tg.r } : {}) }); });
       return commit(`${q.list.length}개 운동을 추가했어요`);
     }
     case "lx-add": ui.lxAdd = true; render(); document.getElementById("lx-name")?.focus(); return;
@@ -1970,7 +1998,8 @@ $app.addEventListener("click", async (e) => {
       syncTodayEx();
       // 운동법에 같은 이름이 있으면 그 무게와 개수를 가져옴
       const tpl = progEx(n) || lastOf(n);
-      S.today.ex.push({ id: newId(), n: n.slice(0, 30), w: tpl ? tpl.w : 0, r: tpl?.r || 10, s: tpl?.s || 3, done: 0 });
+      const ptg = progEx(n);
+      S.today.ex.push({ id: newId(), n: n.slice(0, 30), w: tpl ? tpl.w : 0, r: tpl?.r || 10, s: tpl?.s || 3, done: 0, ...(ptg ? { tw: ptg.w, tr: ptg.r } : {}) });
       ui.lxAdd = false;
       return commit();
     }

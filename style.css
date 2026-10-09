@@ -847,3 +847,13 @@ select { -webkit-appearance: none; appearance: none; min-height: 42px; padding-r
 .modal-settings .row2 label, .modal-settings .fs > label:not(.switch-row):not(.goal) { display: grid; gap: 5px; }
 .goal { align-content: start; }
 .app-ver { margin-right: auto; align-self: center; font-size: .75rem; color: var(--muted); }
+/* 폰: 오늘 친구들은 제목과 전체 보기를 한 줄에, 친구 칸은 아래 줄에 */
+@media (max-width: 600px) {
+  .friend-strip { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 10px; padding: 14px 16px; }
+  .friend-strip .fs-chips { grid-column: 1 / -1; grid-row: 2; }
+  .friend-strip .fs-all, .friend-strip .btn { grid-column: 2; grid-row: 1; margin: 0; }
+  .friend-strip .fs-text { grid-column: 1 / -1; }
+  .fs-chip { max-width: 100%; }
+  .fs-name { max-width: 9em; }
+}
+.ex-row .x { width: 28px; }
