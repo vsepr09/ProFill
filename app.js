@@ -472,7 +472,9 @@ function buildPlan() {
 }
 function suggest(gap) {
   const inList = (id) => S.today.items.some((i) => i.foodId === id);
-  const opts = allFoods().filter((f) => f.protein >= 3 && !(f.kind === "meal" && inList(f.id))).map((f) => {
+  const MEAL_T = { 1: 8 * 60, 2: 12 * 60 + 40, 3: 18 * 60 + 20 };
+  const passed = (f) => f.kind === "meal" && nowMin() > MEAL_T[f.mealCode] + 45;   // 이미 지난 끼니는 빼기
+  const opts = allFoods().filter((f) => f.protein >= 3 && !(f.kind === "meal" && inList(f.id)) && !passed(f)).map((f) => {
     const n = f.kind === "meal" ? 1 : Math.min(10, Math.ceil(gap / f.protein));
     return { f, n, g: f.protein * n, cover: f.protein * n >= gap };
   });
@@ -644,7 +646,6 @@ function shownParts(checked = []) {
   const mine = prog.splits.flatMap((sp) => sp.parts);
   return PARTS.filter((p) => mine.includes(p) || checked.includes(p));
 }
-const splitLabel = (prog, i) => `${i + 1}일차`;
 // 오늘(월=0) 계획
 function todayPlan() {
   const prog = cleanProgram(S.program);
@@ -668,7 +669,8 @@ const agoLabel = (n) => (n == null ? "기록 없음" : n === 1 ? "어제" : `${n
 const cleanLog = (e) => {
   const c = cleanEx(e);
   if (!c) return null;
-  return { id: str(e.id, 20) || newId(), ...c, s: Math.max(1, Math.min(20, c.s || 1)), done: Math.round(num(e.done, 0, 20)) };
+  const sets = Math.max(1, Math.min(20, c.s || 1));
+  return { id: str(e.id, 20) || newId(), ...c, s: sets, done: Math.min(sets, Math.round(num(e.done, 0, 20))) };
 };
 function syncTodayEx() {
   const plan = todayPlan();
@@ -935,6 +937,8 @@ function autoProgress() {
   return done;
 }
 
+/* 나의 운동법 편집 */
+const newEx = () => ({ n: "", w: "", r: 10, s: 3 });
 function programDraft() {
   const p = cleanProgram(S.program);
   if (p) return JSON.parse(JSON.stringify(p));
