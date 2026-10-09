@@ -9,8 +9,9 @@ import {
   collection, getDocs, query, where, onSnapshot, getDocFromCache,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 import { firebaseConfig } from "./firebase-config.js";
-import { GOALS, KINDS } from "./data.js";
+import { GOALS, KINDS } from "./data.js?v=30";
 
+const APP_VERSION = "30";
 /* ---------- Firebase ---------- */
 const fbApp = initializeApp(firebaseConfig);
 const auth = getAuth(fbApp);
@@ -22,7 +23,18 @@ const EMAIL_DOMAIN = "iasa-protein.app"; // 아이디를 이메일 형식으로 
 
 /* ---------- 인터넷 없이 열기 ---------- */
 if ("serviceWorker" in navigator) {
-  const reg = () => navigator.serviceWorker.register("./sw.js").catch((e) => console.warn("sw", e));
+  const reg = () => navigator.serviceWorker.register("./sw.js", { updateViaCache: "none" })
+    .then((r) => { document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") r.update().catch(() => {}); }); })
+    .catch((e) => console.warn("sw", e));
+  // 새 버전이 설치되면 한 번만 새로고침해서 바로 적용
+  const hadController = !!navigator.serviceWorker.controller;
+  let reloaded = false;
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (!hadController || reloaded) return;
+    reloaded = true;
+    flushSave();
+    setTimeout(() => location.reload(), 300);
+  });
   if (document.readyState === "complete") reg(); else window.addEventListener("load", reg);
 }
 function updateOnline() {
@@ -1572,7 +1584,7 @@ function settingsHTML(first) {
       </div>`}
     </div>
     <p class="form-err" id="s-err"></p>
-    <div class="modal-actions">${first ? "" : `<button class="btn ghost" data-act="close-modal">취소</button>`}<button class="btn primary" data-act="save-settings">저장</button></div>`;
+    <div class="modal-actions"><span class="app-ver">버전 ${APP_VERSION}</span>${first ? "" : `<button class="btn ghost" data-act="close-modal">취소</button>`}<button class="btn primary" data-act="save-settings">저장</button></div>`;
 }
 
 function guideHTML() {

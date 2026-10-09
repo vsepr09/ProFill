@@ -1,5 +1,5 @@
 // ProFill 서비스 워커: 한 번 열었던 사이트는 인터넷 없이도 열리게 함
-const VERSION = "profill-v1";
+const VERSION = "profill-v30";
 const SHELL = [
   "./", "./index.html", "./app.js", "./style.css", "./data.js", "./firebase-config.js",
   "./manifest.webmanifest", "./icon-192.png", "./icon-512.png", "./apple-touch-icon.png",
@@ -8,7 +8,7 @@ const SHELL = [
 const CDN = ["https://www.gstatic.com/firebasejs/", "https://cdn.jsdelivr.net/", "https://fonts.googleapis.com/", "https://fonts.gstatic.com/"];
 
 self.addEventListener("install", (e) => {
-  e.waitUntil(caches.open(VERSION).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
+  e.waitUntil(caches.open(VERSION).then((c) => c.addAll(SHELL.map((u) => new Request(u, { cache: "reload" })))).then(() => self.skipWaiting()));
 });
 self.addEventListener("activate", (e) => {
   e.waitUntil(caches.keys()
@@ -35,7 +35,8 @@ self.addEventListener("fetch", (e) => {
 async function networkFirst(req, ignoreSearch) {
   const cache = await caches.open(VERSION);
   try {
-    const res = await fetch(req);
+    // 브라우저에 저장된 옛 파일 말고 항상 서버에 새 버전이 있는지 확인
+    const res = await fetch(req, { cache: "no-cache" });
     if (res.ok) cache.put(ignoreSearch ? req.url.split("?")[0] : req, res.clone());
     return res;
   } catch (err) {

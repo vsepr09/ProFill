@@ -846,3 +846,4 @@ select { -webkit-appearance: none; appearance: none; min-height: 42px; padding-r
 .switch { min-height: 0; flex: none; }
 .modal-settings .row2 label, .modal-settings .fs > label:not(.switch-row):not(.goal) { display: grid; gap: 5px; }
 .goal { align-content: start; }
+.app-ver { margin-right: auto; align-self: center; font-size: .75rem; color: var(--muted); }
