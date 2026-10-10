@@ -9,9 +9,9 @@ import {
   collection, getDocs, query, where, onSnapshot, getDocFromCache,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 import { firebaseConfig } from "./firebase-config.js";
-import { GOALS, KINDS } from "./data.js?v=1.4.2";
+import { GOALS, KINDS } from "./data.js?v=1.4.3";
 
-const APP_VERSION = "1.4.2";
+const APP_VERSION = "1.4.3";
 /* ---------- Firebase ---------- */
 const fbApp = initializeApp(firebaseConfig);
 const auth = getAuth(fbApp);
