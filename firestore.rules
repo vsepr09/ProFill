@@ -2,12 +2,17 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
+    function signedIn() { return request.auth != null; }
+    function isMe(userId) { return signedIn() && request.auth.uid == userId; }
+
+    // ===================== ProFill =====================
+
     // 내 기록: 나만 읽고 쓰기
     // 고칠 때는 "내가 본 최신 버전(base)"이 서버의 최신 버전(updatedAt)과 같아야만 저장됨
     // → 오래 열어 둔 다른 기기의 화면이 새 기록을 덮어쓰지 못함
     match /users/{userId} {
-      allow read, create, delete: if request.auth != null && request.auth.uid == userId;
-      allow update: if request.auth != null && request.auth.uid == userId
+      allow read, create, delete: if isMe(userId);
+      allow update: if isMe(userId)
         && request.resource.data.updatedAt is number
         && (resource.data.get('updatedAt', null) == null
             || request.resource.data.get('base', null) == resource.data.updatedAt);
@@ -15,14 +20,60 @@ service cloud.firestore {
 
     // 친구 보기용 공개 정보: 로그인한 사람은 모두 읽기, 내 것만 쓰기
     match /public/{userId} {
-      allow read: if request.auth != null;
-      allow delete: if request.auth != null && request.auth.uid == userId;
-      allow create, update: if request.auth != null && request.auth.uid == userId
+      allow read: if signedIn();
+      allow delete: if isMe(userId);
+      allow create, update: if isMe(userId)
         && request.resource.data.nickname is string
         && request.resource.data.nickname.size() <= 20
         && request.resource.data.date is string
         && request.resource.data.pct is number
         && request.resource.data.streak is number;
     }
+
+    // ===================== FocusFill =====================
+
+    function isFriend(other) {
+      let a = /databases/$(database)/documents/focusfill_friendreq/$(request.auth.uid + '_' + other);
+      let b = /databases/$(database)/documents/focusfill_friendreq/$(other + '_' + request.auth.uid);
+      return (exists(a) && get(a).data.status == 'accepted') || (exists(b) && get(b).data.status == 'accepted');
+    }
+
+    // 비공개: 성별, 디톡스 대상, 종료 이유, 메모, 참기 기록, 일기 → 나만
+    match /focusfill_users/{userId} {
+      allow read, write: if isMe(userId);
+    }
+    match /focusfill_users/{userId}/{document=**} {
+      allow read, write: if isMe(userId);
+    }
+
+    // 친구 보기용: 닉네임과 공개를 켠 항목만 → 나와 친구만 읽기, 내 것만 쓰기
+    match /focusfill_public/{userId} {
+      allow read: if isMe(userId) || (signedIn() && isFriend(userId));
+      allow write: if isMe(userId);
+    }
+
+    // 친구 코드 → uid (코드를 알아야만 조회 가능, 목록 보기는 불가)
+    match /focusfill_codes/{code} {
+      allow get: if signedIn();
+      allow create: if signedIn() && request.resource.data.uid == request.auth.uid;
+      allow update, delete: if signedIn() && resource.data.uid == request.auth.uid
+        && (request.method == 'delete' || request.resource.data.uid == request.auth.uid);
+    }
+
+    // 친구 요청/관계: 문서 이름은 "보낸사람_받는사람"
+    match /focusfill_friendreq/{reqId} {
+      allow read: if signedIn() && (resource.data.from == request.auth.uid || resource.data.to == request.auth.uid);
+      allow create: if signedIn()
+        && request.resource.data.from == request.auth.uid
+        && request.resource.data.to != request.auth.uid
+        && reqId == request.auth.uid + '_' + request.resource.data.to
+        && request.resource.data.status == 'pending';
+      allow update: if signedIn() && resource.data.to == request.auth.uid
+        && request.resource.data.status == 'accepted'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'acceptedAt']);
+      allow delete: if signedIn() && (resource.data.from == request.auth.uid || resource.data.to == request.auth.uid);
+    }
+
+    // 위에 적지 않은 곳은 모두 막힘 (Firestore 기본값)
   }
 }
