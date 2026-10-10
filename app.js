@@ -9,9 +9,9 @@ import {
   collection, getDocs, query, where, onSnapshot, getDocFromCache,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 import { firebaseConfig } from "./firebase-config.js";
-import { GOALS, KINDS } from "./data.js?v=1.4.1";
+import { GOALS, KINDS } from "./data.js?v=1.4.2";
 
-const APP_VERSION = "1.4.1";
+const APP_VERSION = "1.4.2";
 /* ---------- Firebase ---------- */
 const fbApp = initializeApp(firebaseConfig);
 const auth = getAuth(fbApp);
@@ -766,7 +766,7 @@ function exLogRowHTML(e, j, yday) {
   return `<li class="lx ${e.done >= e.s ? "done" : ""}">
     <div class="lx-top"><span class="lx-n">${esc(e.n)}</span><button class="x" data-act="lx-del" data-j="${j}" aria-label="${esc(e.n)} 빼기">×</button></div>
     <div class="lx-bot">
-      <label class="lx-f">${e.w == null ? `<span class="lx-bw">맨몸</span>` : `<input class="lx-w" data-j="${j}" type="number" inputmode="decimal" min="0" max="500" step="0.5" value="${e.w ? fmtG(e.w) : ""}" placeholder="무게" aria-label="무게"><span>kg</span>`}</label>
+      <span class="lx-wf">${e.w == null ? `<span class="lx-bw">맨몸</span>` : `<label class="lx-f"><input class="lx-w" data-j="${j}" type="number" inputmode="decimal" min="0" max="500" step="0.5" value="${e.w ? fmtG(e.w) : ""}" placeholder="무게" aria-label="무게"><span>kg</span></label>`}<button class="bw" data-act="lx-bw" data-j="${j}" aria-label="${e.w == null ? "무게로 바꾸기" : "맨몸으로 바꾸기"}">${e.w == null ? "무게" : "맨몸"}</button></span>
       <label class="lx-f"><input class="lx-r" data-j="${j}" type="number" inputmode="numeric" min="1" max="999" step="1" value="${e.r}" aria-label="개수"><span>회</span></label>
       <div class="dots">${dots}</div>
       <div class="stepper sm"><button data-act="lx-sets" data-j="${j}" data-d="-1" aria-label="세트 줄이기">−</button><span>${e.s}세트</span><button data-act="lx-sets" data-j="${j}" data-d="1" aria-label="세트 늘리기">+</button></div>
@@ -824,7 +824,7 @@ function exLogHTML() {
   const list = syncTodayEx();
   const quick = quickAdds();
   const add = ui.lxAdd
-    ? `<div class="lx-add"><input id="lx-name" maxlength="30" list="lx-names" placeholder="운동 이름" aria-label="운동 이름"><datalist id="lx-names">${knownExNames().map((n) => `<option value="${esc(n)}">`).join("")}</datalist><button class="btn primary small" data-act="lx-add-save">추가</button><button class="btn ghost small" data-act="lx-add-cancel">취소</button></div>`
+    ? `<div class="lx-add"><input id="lx-name" maxlength="30" list="lx-names" placeholder="운동 이름" aria-label="운동 이름"><datalist id="lx-names">${knownExNames().map((n) => `<option value="${esc(n)}">`).join("")}</datalist><button class="toggle lx-add-bw ${ui.lxBw ? "on" : ""}" data-act="lx-add-bw" aria-pressed="${!!ui.lxBw}">맨몸</button><button class="btn primary small" data-act="lx-add-save">추가</button><button class="btn ghost small" data-act="lx-add-cancel">취소</button></div>`
     : `<div class="lx-quick">${quick.map((q) => `<button class="chip" data-act="lx-quick" data-k="${esc(q.key)}" title="${esc(q.list.map((e) => e.n).join(", "))}">${esc(q.label)} <span>+${q.list.length}</span></button>`).join("")}<button class="chip ghost-chip" data-act="lx-add">직접 추가</button></div>`;
   return `<div class="lx-wrap"><h3>오늘 한 운동</h3>${list.length ? `<ul class="lx-list">${list.map((e, j) => exLogRowHTML(e, j)).join("")}</ul>` : ""}${add}</div>`;
 }
@@ -2156,15 +2156,26 @@ $app.addEventListener("click", async (e) => {
       q.list.forEach((e) => { const tg = progExToday(e.n); S.today.ex.push({ id: newId(), n: e.n, w: e.w, r: e.r || 10, s: Math.max(1, e.s || 3), done: 0, ...(tg ? { tw: tg.w, tr: tg.r, ts: tg.s } : {}) }); });
       return commit(`${q.list.length}개 운동을 추가했어요`);
     }
-    case "lx-add": ui.lxAdd = true; render(); document.getElementById("lx-name")?.focus(); return;
+    case "lx-add": ui.lxAdd = true; ui.lxBw = false; render(); document.getElementById("lx-name")?.focus(); return;
     case "lx-add-cancel": ui.lxAdd = false; return render();
+    case "lx-add-bw": {   // 다시 그리지 않고 버튼만 바꿔서 적던 이름을 지키기
+      ui.lxBw = !ui.lxBw;
+      b.classList.toggle("on", ui.lxBw); b.setAttribute("aria-pressed", String(ui.lxBw));
+      document.getElementById("lx-name")?.focus();
+      return;
+    }
+    case "lx-bw": {
+      const e = S.today.ex?.[Number(b.dataset.j)]; if (!e) return;
+      e.w = e.w == null ? (e.tw || lastOf(e.n)?.w || 0) : null;
+      return commit();
+    }
     case "lx-add-save": {
       const n = val("lx-name").trim(); if (!n) return;
       syncTodayEx();
       // 운동법에 같은 이름이 있으면 그 무게와 개수를 가져옴
       const ptg = progExToday(n);
       const tpl = ptg || lastOf(n);
-      S.today.ex.push({ id: newId(), n: n.slice(0, 30), w: tpl ? tpl.w : 0, r: tpl?.r || 10, s: tpl?.s || 3, done: 0, ...(ptg ? { tw: ptg.w, tr: ptg.r, ts: ptg.s } : {}) });
+      S.today.ex.push({ id: newId(), n: n.slice(0, 30), w: ui.lxBw ? null : tpl ? tpl.w : 0, r: tpl?.r || 10, s: tpl?.s || 3, done: 0, ...(ptg ? { tw: ptg.w, tr: ptg.r, ts: ptg.s } : {}) });
       ui.lxAdd = false;
       return commit();
     }

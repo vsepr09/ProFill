@@ -903,3 +903,11 @@ select { -webkit-appearance: none; appearance: none; min-height: 42px; padding-r
 .fd-sec .cal-stats b { font-size: 1.35rem; }
 .fd-sec .cal-stats small { font-size: .72rem; }
 .an-list .badge-s.flat { background: var(--surface); }
+
+/* 오늘 한 운동: 무게/맨몸 바꾸기 */
+.lx-wf { display: inline-flex; align-items: center; gap: 6px; }
+.lx-wf .bw { padding: 6px 8px; }
+.lx-add input { min-width: 0; }
+.lx-add .lx-add-bw { flex: none; border-radius: 8px; padding: 0 12px; }
+.lx-add .lx-add-bw { background: var(--surface); color: var(--muted); border: 1px solid var(--line); }
+.lx-add .lx-add-bw.on { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
