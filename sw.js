@@ -1,8 +1,8 @@
 // ProFill 서비스 워커: 한 번 열었던 사이트는 인터넷 없이도 열리게 함
-const VERSION = "profill-v1.4.3";
+const VERSION = "profill-v1.4.4";
 const SHELL = [
   "./", "./index.html", "./app.js", "./style.css", "./data.js", "./firebase-config.js",
-  "./manifest.webmanifest", "./icon-192.png", "./icon-512.png", "./icon-maskable-512.png", "./apple-touch-icon.png",
+  "./manifest.webmanifest", "./icon-round-192.png", "./icon-round-512.png", "./icon-maskable-512.png", "./apple-touch-icon.png",
 ];
 // 함께 저장해 둘 바깥 주소 (Firebase 프로그램, 글꼴). Firebase 데이터 통신은 저장하지 않음
 const CDN = ["https://www.gstatic.com/firebasejs/", "https://cdn.jsdelivr.net/", "https://fonts.googleapis.com/", "https://fonts.gstatic.com/"];
