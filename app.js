@@ -6,12 +6,12 @@ import {
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import {
   initializeFirestore, persistentLocalCache, persistentMultipleTabManager, doc, getDoc, setDoc, deleteDoc,
-  collection, getDocs, query, where, onSnapshot, getDocFromCache,
+  collection, getDocs, query, where, onSnapshot, getDocFromCache, getDocFromServer,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 import { firebaseConfig } from "./firebase-config.js";
-import { GOALS, KINDS } from "./data.js?v=1.4.5";
+import { GOALS, KINDS } from "./data.js?v=1.4.6";
 
-const APP_VERSION = "1.4.5";
+const APP_VERSION = "1.4.6";
 /* ---------- Firebase ---------- */
 const fbApp = initializeApp(firebaseConfig);
 const auth = getAuth(fbApp);
@@ -185,17 +185,70 @@ function save() {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(flushSave, 500);
 }
+// 버전 표시: 저장할 때마다 updatedAt을 새로 찍고, 어느 버전 위에서 고쳤는지(base)를 함께 보냄.
+// 서버 규칙이 "서버의 최신 버전 = base"일 때만 저장을 받아 줘서, 오래된 화면(예: 며칠 열어 둔 탭)이 새 기록을 덮어쓰지 못함
+let baseAt = 0;
+const setBase = (d) => { baseAt = Number(d?.updatedAt) || 0; };
+// 서버 기록으로 통째로 바꿀 때 (되돌리기도 지움: 옛 상태로 덮어쓰지 않게)
+function adopt(data) { S = migrate(data); setBase(S); undoFn = null; applyTheme(S.theme); }
+// 서버에서 직접 받기 (기기에 저장된 옛 사본 말고). 안 되면 보통 방법으로
+const fetchServerDoc = () => Promise.race([
+  getDocFromServer(doc(db, "users", uid)).catch(() => getDoc(doc(db, "users", uid))),
+  new Promise((_, no) => setTimeout(() => no(new Error("timeout")), 8000)),
+]);
 async function flushSave() {
   if (!saveTimer || !S || !uid || deleting) return;
+  if (resuming) { save(); return; }   // 최신 기록을 받아 오는 중이면 조금 뒤에
   clearTimeout(saveTimer); saveTimer = null;
+  S.base = baseAt;
+  S.updatedAt = Math.max(Date.now(), baseAt + 1);
+  baseAt = S.updatedAt;
   const who = uid, data = JSON.parse(JSON.stringify(S));
   writing++;
-  try { await setDoc(doc(db, "users", who), data); remotePending = null; }
-  catch (e) {
+  let conflict = false;
+  try {
+    await setDoc(doc(db, "users", who), data);
+    // 내 저장 뒤에 다른 기기가 또 저장한 게 기다리고 있으면 남겨 둠
+    if (!(remotePending && Number(remotePending.updatedAt) > data.updatedAt)) remotePending = null;
+  } catch (e) {
     console.error(e);
-    toast(navigator.onLine === false ? "인터넷이 끊겨 있어요. 연결되면 다시 저장해요." : `저장하지 못했어요 (${e.code || e.message || "알 수 없는 오류"})`);
+    if (e.code === "permission-denied") conflict = true;   // 서버에 더 새로운 기록이 있음
+    else if (baseAt === data.updatedAt) baseAt = data.base;   // 서버에 안 들어갔으니 버전도 되돌림
+    if (!conflict) toast(navigator.onLine === false ? "인터넷이 끊겨 있어요. 연결되면 다시 저장해요." : `저장하지 못했어요 (${e.code || e.message || "알 수 없는 오류"})`);
   } finally { writing--; }
-  if (uid === who) syncPublic();
+  if (uid !== who) return;
+  if (conflict) { await reloadFromServer("다른 기기에서 저장한 더 새로운 기록이 있어서 그걸 불러왔어요. 방금 한 것은 다시 해 주세요."); return; }
+  syncPublic();
+}
+// 서버의 최신 기록으로 바꿈
+async function reloadFromServer(msg) {
+  if (!uid) return false;
+  try {
+    const sn = await fetchServerDoc();
+    if (!sn.exists()) return false;
+    clearTimeout(saveTimer); saveTimer = null; remotePending = null;
+    adopt(sn.data());
+    if (ensureToday()) save();
+    render();
+    if (msg) toast(msg);
+    return true;
+  } catch (e) { console.warn("reload", e); return false; }
+}
+// 오래 숨어 있던 탭으로 돌아오면, 아무것도 바꾸기 전에 서버의 최신 기록부터 받아 옴
+let resuming = false, hiddenAt = 0;
+async function resume() {
+  if (resuming) return;
+  if (!S || !uid || navigator.onLine === false || Date.now() - hiddenAt < 20000) { tick(); return; }
+  resuming = true;
+  try {
+    const sn = await fetchServerDoc();
+    if (sn.exists() && Number(sn.data().updatedAt || 0) > baseAt) {   // 서버가 더 새것일 때만
+      clearTimeout(saveTimer); saveTimer = null; remotePending = null;
+      adopt(sn.data()); render();
+    }
+  } catch (e) { console.warn("resume", e); }
+  resuming = false;
+  tick();
 }
 // 친구 보기: 공개를 켠 사람만 닉네임, 오늘 달성률, 연속 기록을 올림
 function myPublic() {
@@ -1907,6 +1960,7 @@ function commit(msg, undo = false) { save(); render(); if (msg) toast(msg, undo)
 $app.addEventListener("click", async (e) => {
   const b = e.target.closest("[data-act]");
   if (!b || !b.dataset.act) return;
+  if (resuming) return;   // 최신 기록을 받아 오는 중
   // 아이패드는 버튼을 눌러도 입력칸에서 포커스가 안 빠져서, 적던 무게나 개수가 저장 전에 사라짐 → 먼저 반영
   const ae = document.activeElement;
   if (ae && ae !== b && ae.matches?.(".lx-w, .lx-r, .hg")) ae.blur();
@@ -1917,7 +1971,7 @@ $app.addEventListener("click", async (e) => {
     const next = remotePending && migrate(JSON.parse(JSON.stringify(remotePending)));
     remotePending = null;
     if (next && stable(next) !== stable(S)) {
-      S = next;
+      S = next; setBase(S); undoFn = null;
       applyTheme(S.theme);
       if (ensureToday()) save();
       // 목록 순서(번호)로 가리키는 버튼은 화면이 바뀌었을 수 있으니 이번 누름은 쉬고 다시 그림
@@ -2343,6 +2397,7 @@ $app.addEventListener("change", (e) => {
   }
 });
 $app.addEventListener("change", (e) => {
+  if (resuming) return;
   const t = e.target;
   if (t.id === "s-auto") {
     S.autoProgress = t.checked;
@@ -2384,7 +2439,7 @@ document.addEventListener("keydown", (e) => {
 
 /* ---------- 시간 흐름 ---------- */
 function tick() {
-  if (!S) return;
+  if (!S || resuming) return;
   if (remotePending) applyRemote(remotePending);
   if (renderPending) softRender();
   if (ensureToday()) {
@@ -2399,11 +2454,13 @@ function tick() {
 }
 setInterval(tick, 30000);
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "hidden") { flushSave(); return; }
-  tick();
+  if (document.visibilityState === "hidden") { hiddenAt = Date.now(); flushSave(); return; }
+  resume();
   if (S) watchFriends();
 });
-window.addEventListener("pagehide", () => { flushSave(); });
+window.addEventListener("pagehide", () => { hiddenAt = Date.now(); flushSave(); });
+// 사파리가 저장해 둔 페이지를 다시 보여 줄 때도 최신 기록부터
+window.addEventListener("pageshow", (e) => { if (e.persisted) { hiddenAt = 1; resume(); } });
 
 /* ---------- 로그인 상태 ---------- */
 // 키 순서와 상관없이 같은 내용인지 비교
@@ -2415,11 +2472,10 @@ let remotePending = null;
 // 다른 기기(예: 학교 컴퓨터)에서 바꾼 내용을 실시간으로 받아옴
 function applyRemote(data) {
   if (!S || writing || saveTimer) { remotePending = data; return; }
-  if (stable(data) === stable(S)) { remotePending = null; return; }
+  if (stable(data) === stable(S)) { remotePending = null; setBase(data); return; }
   if (isTyping() || ui.modal?.draft) { remotePending = data; return; }
   remotePending = null;
-  S = migrate(data);
-  applyTheme(S.theme);
+  adopt(data);
   if (ensureToday()) save();
   render();
   watchFriends();
@@ -2442,6 +2498,7 @@ onAuthStateChanged(auth, async (user) => {
     if (uid !== user.uid) return;
     const isNew = !snap.exists();
     S = isNew ? freshData(pendingNick || user.email.split("@")[0]) : migrate(snap.data());
+    setBase(isNew ? null : S);
     applyTheme(S.theme);
     if (ensureToday() || isNew) save();
     if (!S.weight) ui.modal = { type: "settings", first: true, draft: settingsDraft() };

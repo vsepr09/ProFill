@@ -3,8 +3,14 @@ service cloud.firestore {
   match /databases/{database}/documents {
 
     // 내 기록: 나만 읽고 쓰기
+    // 고칠 때는 "내가 본 최신 버전(base)"이 서버의 최신 버전(updatedAt)과 같아야만 저장됨
+    // → 오래 열어 둔 다른 기기의 화면이 새 기록을 덮어쓰지 못함
     match /users/{userId} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
+      allow read, create, delete: if request.auth != null && request.auth.uid == userId;
+      allow update: if request.auth != null && request.auth.uid == userId
+        && request.resource.data.updatedAt is number
+        && (resource.data.get('updatedAt', null) == null
+            || request.resource.data.get('base', null) == resource.data.updatedAt);
     }
 
     // 친구 보기용 공개 정보: 로그인한 사람은 모두 읽기, 내 것만 쓰기
