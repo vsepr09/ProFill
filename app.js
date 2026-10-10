@@ -9,9 +9,9 @@ import {
   collection, getDocs, query, where, onSnapshot, getDocFromCache,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 import { firebaseConfig } from "./firebase-config.js";
-import { GOALS, KINDS } from "./data.js?v=1.4.4";
+import { GOALS, KINDS } from "./data.js?v=1.4.5";
 
-const APP_VERSION = "1.4.4";
+const APP_VERSION = "1.4.5";
 /* ---------- Firebase ---------- */
 const fbApp = initializeApp(firebaseConfig);
 const auth = getAuth(fbApp);
@@ -314,7 +314,7 @@ let renderPending = false;
 const isTyping = () => document.activeElement && ["INPUT", "SELECT", "TEXTAREA"].includes(document.activeElement.tagName);
 // 글자를 입력 중이거나 설정 창이 열려 있으면 다시 그리기를 미룸 (입력한 내용이 지워지지 않게)
 function softRender() {
-  if (isTyping() || ui.modal?.type === "settings") { renderPending = true; return; }
+  if (isTyping() || ui.modal?.draft) { renderPending = true; return; }
   renderPending = false;
   render();
 }
@@ -824,7 +824,7 @@ function exLogHTML() {
   const list = syncTodayEx();
   const quick = quickAdds();
   const add = ui.lxAdd
-    ? `<div class="lx-add"><input id="lx-name" maxlength="30" list="lx-names" placeholder="운동 이름" aria-label="운동 이름"><datalist id="lx-names">${knownExNames().map((n) => `<option value="${esc(n)}">`).join("")}</datalist><button class="toggle lx-add-bw ${ui.lxBw ? "on" : ""}" data-act="lx-add-bw" aria-pressed="${!!ui.lxBw}">맨몸</button><button class="btn primary small" data-act="lx-add-save">추가</button><button class="btn ghost small" data-act="lx-add-cancel">취소</button></div>`
+    ? `<div class="lx-add"><input id="lx-name" value="${esc(ui.lxName || "")}" maxlength="30" list="lx-names" placeholder="운동 이름" aria-label="운동 이름"><datalist id="lx-names">${knownExNames().map((n) => `<option value="${esc(n)}">`).join("")}</datalist><button class="toggle lx-add-bw ${ui.lxBw ? "on" : ""}" data-act="lx-add-bw" aria-pressed="${!!ui.lxBw}">맨몸</button><button class="btn primary small" data-act="lx-add-save">추가</button><button class="btn ghost small" data-act="lx-add-cancel">취소</button></div>`
     : `<div class="lx-quick">${quick.map((q) => `<button class="chip" data-act="lx-quick" data-k="${esc(q.key)}" title="${esc(q.list.map((e) => e.n).join(", "))}">${esc(q.label)} <span>+${q.list.length}</span></button>`).join("")}<button class="chip ghost-chip" data-act="lx-add">직접 추가</button></div>`;
   return `<div class="lx-wrap"><h3>오늘 한 운동</h3>${list.length ? `<ul class="lx-list">${list.map((e, j) => exLogRowHTML(e, j)).join("")}</ul>` : ""}${add}</div>`;
 }
@@ -953,8 +953,9 @@ function exStats() {
   recordToday();
   const by = sessionsBy();
   const today = keyToUTC(S.today.date);
-  return Object.entries(by).map(([n, ss]) => {
-    const bw = ss[ss.length - 1].w == null;
+  return Object.entries(by).map(([n, all]) => {
+    const bw = all[all.length - 1].w == null;
+    const ss = all.filter((x) => (x.w == null) === bw);   // 맨몸과 무게 기록을 섞어 비교하지 않음
     const metric = (x) => (bw ? x.r * x.s : e1rm(x.w, x.r));          // 맨몸은 총 개수, 무게는 추정 1RM
     const last = ss[ss.length - 1];
     // 4주 안의 첫 기록과 비교. 4주 안에 한 번뿐이면 그 직전 기록과 비교
@@ -969,7 +970,7 @@ function exStats() {
     let best = 0, prs = 0;
     ss.forEach((x) => { const m = metric(x); if (m > best) { if (best && keyToUTC(x.k) >= today - 30 * 864e5) prs++; best = m; } });
     const status = ss.length < 2 ? "new" : change > 0.02 ? "up" : change < -0.02 ? "down" : "flat";
-    return { n, ss, bw, last, best, m1, change, prs, status, nexts: nextsOf(n, ss) };
+    return { n, ss, bw, last, best, m1, change, prs, status, nexts: nextsOf(n, all) };
   }).sort((a, b) => (a.last.k < b.last.k ? 1 : a.last.k > b.last.k ? -1 : a.n.localeCompare(b.n)));
 }
 // 주별 볼륨 (무게 × 개수 × 세트, 최근 6주)
@@ -1906,9 +1907,12 @@ function commit(msg, undo = false) { save(); render(); if (msg) toast(msg, undo)
 $app.addEventListener("click", async (e) => {
   const b = e.target.closest("[data-act]");
   if (!b || !b.dataset.act) return;
+  // 아이패드는 버튼을 눌러도 입력칸에서 포커스가 안 빠져서, 적던 무게나 개수가 저장 전에 사라짐 → 먼저 반영
+  const ae = document.activeElement;
+  if (ae && ae !== b && ae.matches?.(".lx-w, .lx-r, .hg")) ae.blur();
+  // 자정이 지났으면 먼저 새 하루로 (어제 기록에 잘못 들어가지 않게)
+  if (S && S.today.date !== dateKey()) { tick(); return; }
   if (S && !writing && !saveTimer) {
-    // 자정이 지났으면 먼저 새 하루로 (어제 기록에 잘못 들어가지 않게)
-    if (S.today.date !== dateKey()) { tick(); return; }
     // 다른 기기에서 바뀐 내용이 기다리고 있으면 먼저 반영해서 덮어쓰지 않게 함
     const next = remotePending && migrate(JSON.parse(JSON.stringify(remotePending)));
     remotePending = null;
@@ -1916,7 +1920,8 @@ $app.addEventListener("click", async (e) => {
       S = next;
       applyTheme(S.theme);
       if (ensureToday()) save();
-      if (!ui.modal?.draft) {   // 화면이 바뀌었을 수 있으니 이번 누름은 쉬고 다시 그림
+      // 목록 순서(번호)로 가리키는 버튼은 화면이 바뀌었을 수 있으니 이번 누름은 쉬고 다시 그림
+      if (!ui.modal?.draft && (b.dataset.i !== undefined || b.dataset.j !== undefined)) {
         render();
         toast("다른 기기에서 바뀐 내용을 불러왔어요");
         return;
@@ -2026,11 +2031,13 @@ $app.addEventListener("click", async (e) => {
       const err = document.getElementById("af-err");
       if (!name) { err.textContent = "이름을 적어 주세요."; return; }
       if (!(protein > 0 && protein <= 200)) { err.textContent = "단백질은 0보다 크고 200g 이하로 적어 주세요."; return; }
-      if (ui.editingFood) {
-        Object.assign(S.customFoods.find((f) => f.id === ui.editingFood), { name, protein: r1(protein), serving, kind });
+      const editing = ui.editingFood && S.customFoods.find((f) => f.id === ui.editingFood);
+      if (editing) {
+        Object.assign(editing, { name, protein: r1(protein), serving, kind });
         ui.editingFood = null; ui.addOpen = false;
         return commit("수정한 내용을 저장했어요");
       }
+      ui.editingFood = null;
       S.customFoods.unshift({ id: `c-${newId()}`, name, protein: r1(protein), serving, kind });
       ui.addOpen = false; ui.filter = "all"; ui.query = "";
       return commit(`${eul(name)} 목록에 추가했어요`);
@@ -2040,6 +2047,7 @@ $app.addEventListener("click", async (e) => {
       if (!f) return;
       snapshot();
       S.customFoods = S.customFoods.filter((x) => x.id !== f.id);
+      if (ui.editingFood === f.id) { ui.editingFood = null; ui.addOpen = false; }
       S.today.items = S.today.items.filter((x) => x.foodId !== f.id);
       S.lastItems = S.lastItems.filter((x) => x.foodId !== f.id);
       S.routines.forEach((r) => { r.items = r.items.filter((x) => x.foodId !== f.id); });
@@ -2156,8 +2164,8 @@ $app.addEventListener("click", async (e) => {
       q.list.forEach((e) => { const tg = progExToday(e.n); S.today.ex.push({ id: newId(), n: e.n, w: e.w, r: e.r || 10, s: Math.max(1, e.s || 3), done: 0, ...(tg ? { tw: tg.w, tr: tg.r, ts: tg.s } : {}) }); });
       return commit(`${q.list.length}개 운동을 추가했어요`);
     }
-    case "lx-add": ui.lxAdd = true; ui.lxBw = false; render(); document.getElementById("lx-name")?.focus(); return;
-    case "lx-add-cancel": ui.lxAdd = false; return render();
+    case "lx-add": ui.lxAdd = true; ui.lxBw = false; ui.lxName = ""; render(); document.getElementById("lx-name")?.focus(); return;
+    case "lx-add-cancel": ui.lxAdd = false; ui.lxName = ""; return render();
     case "lx-add-bw": {   // 다시 그리지 않고 버튼만 바꿔서 적던 이름을 지키기
       ui.lxBw = !ui.lxBw;
       b.classList.toggle("on", ui.lxBw); b.setAttribute("aria-pressed", String(ui.lxBw));
@@ -2176,7 +2184,7 @@ $app.addEventListener("click", async (e) => {
       const ptg = progExToday(n);
       const tpl = ptg || lastOf(n);
       S.today.ex.push({ id: newId(), n: n.slice(0, 30), w: ui.lxBw ? null : tpl ? tpl.w : 0, r: tpl?.r || 10, s: tpl?.s || 3, done: 0, ...(ptg ? { tw: ptg.w, tr: ptg.r, ts: ptg.s } : {}) });
-      ui.lxAdd = false;
+      ui.lxAdd = false; ui.lxName = "";
       return commit();
     }
     case "go-add": ui.addOpen = true; ui.editingFood = null; render(); document.getElementById("af-name")?.scrollIntoView({ block: "center" }); document.getElementById("af-name")?.focus(); return;
@@ -2341,6 +2349,7 @@ $app.addEventListener("change", (e) => {
     const up = autoProgress();
     return commit(up.length ? `운동법을 올렸어요: ${up.join(", ")}` : t.checked ? "자동으로 올리기를 켰어요" : "자동으로 올리기를 껐어요");
   }
+  if ((t.classList.contains("hg") || t.classList.contains("lx-w") || t.classList.contains("lx-r")) && t.value.trim() === "") return;   // 비워 둔 칸은 그대로
   if (t.classList.contains("hg")) {
     S.homeG = { ...(S.homeG || {}), [t.dataset.c]: r1(num(t.value, 0, 200)) };
     return commit();
@@ -2359,6 +2368,7 @@ $app.addEventListener("input", (e) => {
     const out = document.getElementById("s-cf-out");
     if (out) out.textContent = cfPreview(val("s-weight"), val("s-cf"));
   }
+  if (e.target.id === "lx-name") ui.lxName = e.target.value;
   if (e.target.id === "foodSearch") {
     ui.query = e.target.value;
     document.getElementById("foodRows").innerHTML = foodRowsHTML();
@@ -2378,6 +2388,8 @@ function tick() {
   if (remotePending) applyRemote(remotePending);
   if (renderPending) softRender();
   if (ensureToday()) {
+    if (ui.modal?.type === "settings") readSettingsForm();
+    if (ui.modal?.type === "program") readProgramForm();
     save(); loadMeals(); render(); watchFriends();
     toast(autoMsg || "새로운 하루예요. 체크리스트를 새로 시작했어요."); autoMsg = "";
     return;
