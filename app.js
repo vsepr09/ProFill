@@ -9,9 +9,9 @@ import {
   collection, getDocs, query, where, onSnapshot, getDocFromCache, getDocFromServer,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 import { firebaseConfig } from "./firebase-config.js";
-import { GOALS, KINDS } from "./data.js?v=1.4.6";
+import { GOALS, KINDS } from "./data.js?v=1.5.0";
 
-const APP_VERSION = "1.4.6";
+const APP_VERSION = "1.5.0";
 /* ---------- Firebase ---------- */
 const fbApp = initializeApp(firebaseConfig);
 const auth = getAuth(fbApp);
@@ -390,7 +390,10 @@ function cleanPublic(id, d) {
         return { n: str(n, 40), g: r1(num(g, 0, 9999)) };
       }),
       parts: cleanParts(dt.parts), program: cleanProgram(dt.program),
-      ex: (Array.isArray(dt.ex) ? dt.ex : []).slice(0, 20).map(cleanEx).filter((x) => x && x.s),
+      ex: (Array.isArray(dt.ex) ? dt.ex : []).slice(0, 20).map((raw) => {
+        const c = cleanEx(raw);
+        return c && c.s ? { ...c, d: parseSets(raw?.d).map((y) => setStr(y.w, y.r)) } : null;
+      }).filter(Boolean),
       an: cleanAn(dt.an),
       week: (Array.isArray(dt.week) ? dt.week : []).slice(0, 7)
         .filter((w) => w && /^\d{8}$/.test(String(w.k))).map((w) => ({ k: String(w.k), p: Math.round(num(w.p, 0, 999)) })),
@@ -746,7 +749,13 @@ function cleanProgram(p) {
 }
 // 분할 이름은 운동 부위로 (부위를 아직 안 골랐으면 순서로)
 const splitName = (sp, i) => (sp?.parts?.length ? sp.parts.join("·") : `분할 ${i + 1}`);
-const exText = (e) => `${e.w == null ? "맨몸" : `${fmtG(e.w)}kg`} · ${e.r}회 · ${e.s}세트`;
+// 세트마다 다르게 했으면 세트별로 (예: 60×8 · 60×8 · 55×6), 모두 같으면 한 줄로
+const exText = (e) => {
+  const d = e.d ? parseSets(e.d) : [];
+  if (d.length > 1 && d.some((y) => y.w !== d[0].w || y.r !== d[0].r)) return d.map(setLabel).join(" · ");
+  const f = d[0] || e;
+  return `${f.w == null ? "맨몸" : `${fmtG(f.w)}kg`} · ${f.r}회 · ${e.s}세트`;
+};
 const exListHTML = (ex) => (ex.length ? `<ul class="ex-list">${ex.map((e) => `<li><span>${esc(e.n)}</span><span>${exText(e)}</span></li>`).join("")}</ul>` : "");
 // 운동법이 있으면 운동법에 들어 있는 부위만 보여 줌 (오늘 이미 체크한 부위는 함께)
 function shownParts(checked = []) {
@@ -774,7 +783,16 @@ function lastDone(part) {
 const agoLabel = (n) => (n == null ? "기록 없음" : n === 1 ? "어제" : `${n}일 전`);
 
 /* ---------- 오늘 한 운동 (세트 체크) ---------- */
-// S.today.ex = [{ id, n 이름, w 무게(null이면 맨몸), r 개수, s 세트, done 한 세트 }], S.today.exFrom = 가져온 분할 번호
+// S.today.ex = [{ id, n 이름, w r 다음 세트 무게(null이면 맨몸)·개수, s 세트, done 한 세트, d 세트마다 한 것 ["60x8", ...] }]
+// 세트 기록은 "무게x개수" 글자로 저장 (맨몸은 "x8"). Firestore는 배열 안에 배열을 못 넣고, 글자가 가장 작음
+const setStr = (w, r) => `${w == null ? "" : r1(w)}x${Math.round(r)}`;
+const parseSets = (d) => (Array.isArray(d) ? d : []).slice(0, 20).map((v) => {
+  const m = /^(\d{1,3}(?:\.\d+)?)?x(\d{1,3})$/.exec(String(v));
+  return m ? { w: m[1] === undefined ? null : r1(num(m[1], 0, 500)), r: Math.round(num(m[2], 0, 999)) } : null;
+}).filter(Boolean);
+const setLabel = (x) => (x.w == null ? `${x.r}회` : `${fmtG(x.w)}×${x.r}`);
+// 그 세트가 그날 목표에 못 미쳤는지
+const setLow = (x, tw, tr) => tr !== undefined && (x.r < tr || (tw != null && (x.w ?? 0) < tw));
 const cleanLog = (e) => {
   const c = cleanEx(e);
   if (!c) return null;
@@ -783,6 +801,10 @@ const cleanLog = (e) => {
   if (e.tw !== undefined) out.tw = e.tw === null ? null : r1(num(e.tw, 0, 500));
   if (e.tr !== undefined) out.tr = Math.round(num(e.tr, 0, 999));
   if (e.ts !== undefined) out.ts = Math.round(num(e.ts, 0, 20));
+  // 세트마다 한 것. 예전 기록(세트별 기록 없음)은 그날 무게·개수로 채움
+  const d = parseSets(e.d).slice(0, out.done).map((x) => setStr(x.w, x.r));
+  while (d.length < out.done) d.push(setStr(c.w, c.r));
+  out.d = d;
   return out;
 };
 function syncTodayEx() {
@@ -804,7 +826,9 @@ function syncTodayEx() {
 const logDone = (list) => (list || []).map(cleanLog).filter((e) => e && e.done)
   .map((e) => {
     const tg = e.tr !== undefined ? { w: e.tw ?? null, r: e.tr, s: e.ts } : progEx(e.n);   // 그날의 목표
-    return { n: e.n, w: e.w, r: e.r, s: Math.min(e.done, e.s), t: e.s, ...(tg ? { tw: tg.w ?? null, tr: tg.r } : {}), ...(tg?.s ? { ts: tg.s } : {}) };
+    const first = parseSets(e.d)[0] || { w: e.w, r: e.r };   // 대표값은 첫 세트
+    return { n: e.n, w: first.w, r: first.r, s: Math.min(e.done, e.s), t: e.s, d: e.d.slice(0, e.done),
+      ...(tg ? { tw: tg.w ?? null, tr: tg.r } : {}), ...(tg?.s ? { ts: tg.s } : {}) };
   });
 const wLabel = (w) => (w == null ? "맨몸" : `${fmtG(w)}kg`);
 
@@ -813,17 +837,37 @@ function exLogRowHTML(e, j, yday) {
   const dots = Array.from({ length: e.s }, (_, k) =>
     `<button class="dot ${k < e.done ? "on" : ""}" data-act="${act}" data-j="${j}" data-k="${k}" aria-pressed="${k < e.done}" aria-label="${esc(e.n)} ${k + 1}세트"></button>`).join("");
   if (yday) {
-    return `<li class="lx ${e.done >= e.s ? "done" : ""}"><div class="lx-top"><span class="lx-n">${esc(e.n)}</span><span class="lx-spec">${wLabel(e.w)} · ${e.r}회</span></div>
+    return `<li class="lx ${e.done >= e.s ? "done" : ""}"><div class="lx-top"><span class="lx-n">${esc(e.n)}</span><span class="lx-spec">${e.done ? exText({ ...e, s: e.done }) : `${wLabel(e.w)} · ${e.r}회`}</span></div>
       <div class="lx-bot"><div class="dots">${dots}</div></div></li>`;
   }
+  const done = parseSets(e.d);
+  const next = { w: e.w, r: e.r };
+  const chips = Array.from({ length: e.s }, (_, k) => {
+    const y = done[k];
+    if (y) {
+      const low = setLow(y, e.tw, e.tr);
+      return `<button class="set on ${low ? "low" : ""} ${ui.setEdit?.id === e.id && ui.setEdit.k === k ? "editing" : ""}" data-act="set" data-j="${j}" data-k="${k}" aria-label="${esc(e.n)} ${k + 1}세트 ${setLabel(y)}, 고치기">${setLabel(y)}</button>`;
+    }
+    return `<button class="set" data-act="set" data-j="${j}" data-k="${k}" aria-label="${esc(e.n)} ${k + 1}세트 하기">${setLabel(next)}</button>`;
+  }).join("");
+  // 한 세트를 다시 누르면 그 세트의 개수·무게를 고치는 칸
+  const ed = ui.setEdit?.id === e.id ? done[ui.setEdit.k] : null;
+  if (ui.setEdit?.id === e.id && !ed) ui.setEdit = null;
+  const k = ui.setEdit?.k;
+  const editor = ed ? `<div class="set-ed">
+      <b>${k + 1}세트</b>
+      ${ed.w == null ? "" : `<span class="stepper sm"><button data-act="se" data-j="${j}" data-f="w" data-d="-1" aria-label="무게 줄이기">−</button><span>${fmtG(ed.w)}kg</span><button data-act="se" data-j="${j}" data-f="w" data-d="1" aria-label="무게 늘리기">+</button></span>`}
+      <span class="stepper sm"><button data-act="se" data-j="${j}" data-f="r" data-d="-1" aria-label="개수 줄이기">−</button><span>${ed.r}회</span><button data-act="se" data-j="${j}" data-f="r" data-d="1" aria-label="개수 늘리기">+</button></span>
+      <span class="set-ed-btns"><button class="link danger" data-act="se-del" data-j="${j}">세트 취소</button><button class="btn primary small" data-act="se-close">완료</button></span>
+    </div>` : "";
   return `<li class="lx ${e.done >= e.s ? "done" : ""}">
     <div class="lx-top"><span class="lx-n">${esc(e.n)}</span><button class="x" data-act="lx-del" data-j="${j}" aria-label="${esc(e.n)} 빼기">×</button></div>
     <div class="lx-bot">
       <span class="lx-wf">${e.w == null ? `<span class="lx-bw">맨몸</span>` : `<label class="lx-f"><input class="lx-w" data-j="${j}" type="number" inputmode="decimal" min="0" max="500" step="0.5" value="${e.w ? fmtG(e.w) : ""}" placeholder="무게" aria-label="무게"><span>kg</span></label>`}<button class="bw" data-act="lx-bw" data-j="${j}" aria-label="${e.w == null ? "무게로 바꾸기" : "맨몸으로 바꾸기"}">${e.w == null ? "무게" : "맨몸"}</button></span>
       <label class="lx-f"><input class="lx-r" data-j="${j}" type="number" inputmode="numeric" min="1" max="999" step="1" value="${e.r}" aria-label="개수"><span>회</span></label>
-      <div class="dots">${dots}</div>
       <div class="stepper sm"><button data-act="lx-sets" data-j="${j}" data-d="-1" aria-label="세트 줄이기">−</button><span>${e.s}세트</span><button data-act="lx-sets" data-j="${j}" data-d="1" aria-label="세트 늘리기">+</button></div>
-    </div></li>`;
+      <div class="sets">${chips}</div>
+    </div>${editor}</li>`;
 }
 // 운동 이름별 가장 최근 기록 (무게, 개수, 계획 세트)
 function lastOf(n) {
@@ -920,6 +964,8 @@ function sessionsBy() {
       if (x.w === 0) x.w = null;   // 0kg로 적은 운동은 맨몸으로 봄
       if (raw.tr !== undefined) { x.tr = Math.round(num(raw.tr, 0, 999)); x.tw = raw.tw == null || !num(raw.tw, 0, 500) ? null : r1(num(raw.tw, 0, 500)); }
       if (raw.ts !== undefined) x.ts = Math.round(num(raw.ts, 0, 20)) || undefined;
+      const d = parseSets(raw.d).map((y) => ({ w: y.w === 0 ? null : y.w, r: y.r }));
+      if (d.length) x.d = d;
       (by[c.n] ||= []).push(x);
     }
   }
@@ -942,13 +988,18 @@ function targetsOf(n) {
   }));
   return out.map(({ labels, ...t }) => ({ ...t, label: labels.join(", ") }));
 }
-// 그날의 목표(세트, 개수, 무게)를 다 채웠는지. 목표가 없던 예전 기록은 세트만 봄
+// 달성: 정한 세트를 모두 목표(개수, 무게)대로 함. 목표가 없던 예전 기록은 세트만 봄
+const meets = (y, x) => x.tr === undefined || (y.r >= x.tr && (x.tw == null || (y.w ?? 0) >= x.tw));
 function complete(x) {
   const need = x.ts || x.t;   // 운동법의 세트 수 (예전 기록은 그날 세트 수)
   if (!need || x.s < need) return false;
-  if (x.tr === undefined) return true;
-  return x.r >= x.tr && (x.tw == null || (x.w ?? 0) >= x.tw);
+  if (x.d) return x.d.length >= need && x.d.slice(0, need).every((y) => meets(y, x));
+  return meets(x, x);
 }
+// 첫 세트는 목표대로 했는지 (힘은 충분했는지). 세트별 기록이 없는 예전 기록은 달성 여부로
+const firstOk = (x) => (x.d ? x.d.length > 0 && meets(x.d[0], x) : complete(x));
+// 부분 달성: 앞 세트는 해냈는데 지쳐서 뒤 세트를 줄임 → 실패로 치지 않음
+const partial = (x) => !complete(x) && !!x.d && firstOk(x);
 // 지금 목표로 한 세션인지 (목표를 바꾼 뒤의 기록만 보고 판단)
 function atTarget(x, tg) {
   if (!tg) return true;
@@ -984,8 +1035,9 @@ function overload(all, tg) {
     if (light) return { kind: "up", w: round25(base.w + W_STEP), r: lo, s: base.s, lo, why: `${top}회를 채워서 무게를 올려요` };
     return { kind: "up", w: round25(base.w + W_STEP), r: base.r, s: base.s, why };
   }
-  if (ok.length === 3 && !ok.some(Boolean)) {
-    const why = "세 번 연속 목표에 못 미쳤어요";
+  // 감량은 첫 세트부터 세 번 연속 못 채웠을 때만 (지쳐서 줄인 날은 빼고)
+  if (recent.length === 3 && !recent.some(firstOk)) {
+    const why = "세 번 연속 첫 세트부터 목표에 못 미쳤어요";
     if (bw) return { kind: "down", w: null, r: Math.max(1, base.r - 2), s: base.s, why };
     if (light && base.r > lo) return { kind: "down", w: base.w, r: lo, s: base.s, lo, why };
     let w2 = round25(base.w * 0.9);
@@ -994,6 +1046,7 @@ function overload(all, tg) {
   }
   if (!recent.length) return hold("새 목표로 시작해요");
   if (ok[ok.length - 1]) return { kind: "near", ...base, why: "한 번 더 채우면 올려요" };
+  if (partial(recent[recent.length - 1])) return hold("앞 세트는 채웠어요. 마지막 세트까지 채우면 올려요");
   return hold("이번 목표를 먼저 채워요");
 }
 // 운동별 다음 목표 (분할마다 목표가 다르면 여러 개)
@@ -1009,7 +1062,9 @@ function exStats() {
   return Object.entries(by).map(([n, all]) => {
     const bw = all[all.length - 1].w == null;
     const ss = all.filter((x) => (x.w == null) === bw);   // 맨몸과 무게 기록을 섞어 비교하지 않음
-    const metric = (x) => (bw ? x.r * x.s : e1rm(x.w, x.r));          // 맨몸은 총 개수, 무게는 추정 1RM
+    // 맨몸은 총 개수, 무게는 그날 가장 잘한 세트의 추정 1RM (뒤 세트에서 지쳐도 내려가지 않게)
+    const metric = (x) => (bw ? (x.d ? x.d.reduce((a, y) => a + y.r, 0) : x.r * x.s)
+      : x.d ? Math.max(0, ...x.d.map((y) => e1rm(y.w, y.r))) : e1rm(x.w, x.r));
     const last = ss[ss.length - 1];
     // 4주 안의 첫 기록과 비교. 4주 안에 한 번뿐이면 그 직전 기록과 비교
     let bi = ss.findIndex((x) => keyToUTC(x.k) >= today - 28 * 864e5);
@@ -1023,7 +1078,21 @@ function exStats() {
     let best = 0, prs = 0;
     ss.forEach((x) => { const m = metric(x); if (m > best) { if (best && keyToUTC(x.k) >= today - 30 * 864e5) prs++; best = m; } });
     const status = ss.length < 2 ? "new" : change > 0.02 ? "up" : change < -0.02 ? "down" : "flat";
-    return { n, ss, bw, last, best, m1, change, prs, status, nexts: nextsOf(n, all) };
+    // 지침: 첫 세트 대비 마지막 세트가 얼마나 떨어졌는지 (무게 × 개수, 맨몸은 개수)
+    const dropOf = (x) => {
+      if (!x.d || x.d.length < 2) return null;
+      if (x.d.some((y) => (y.w == null) !== (x.d[0].w == null))) return null;   // 맨몸과 무게가 섞이면 비교 안 함
+      const v = (y) => (y.w ? y.w * y.r : y.r), a = v(x.d[0]), b = v(x.d[x.d.length - 1]);
+      return a ? Math.max(0, 1 - b / a) : null;
+    };
+    // 오늘 아직 하는 중인 운동은 빼고 판단 (운동 중간에 팁이 뜨지 않게)
+    const fin = ss.filter((x) => !(x.k === S.today.date && x.s < (x.ts || x.t || 0)));
+    const drop = fin[fin.length - 1] === last ? dropOf(last) : null;   // 카드에 보이는 마지막 기록 기준
+    const drops = fin.slice(-3).map(dropOf).filter((v) => v != null);
+    const heavy = drops.filter((v) => v >= 0.25).length;
+    const tip = drops.length >= 3 && heavy === 3 ? "세 번 연속 후반에 많이 떨어져요. 세트를 하나 줄이고 무게는 유지해 보세요."
+      : heavy >= 2 ? "후반 세트에서 많이 떨어져요. 세트 사이 쉬는 시간을 2~3분으로 늘려 보세요." : "";
+    return { n, ss, bw, last, best, m1, change, prs, status, drop, tip, nexts: nextsOf(n, all) };
   }).sort((a, b) => (a.last.k < b.last.k ? 1 : a.last.k > b.last.k ? -1 : a.n.localeCompare(b.n)));
 }
 // 주별 볼륨 (무게 × 개수 × 세트, 최근 6주)
@@ -1034,8 +1103,10 @@ function weeklyVolume() {
     let v = 0;
     days.forEach((k) => (S.history[k]?.ex || []).forEach((raw) => {
       const c = cleanEx(raw); if (!c) return;
-      const w = !c.w ? S.weight || 0 : c.w;   // 맨몸(또는 0kg)은 몸무게로 계산
-      v += w * c.r * c.s;
+      const wOf = (w) => (!w ? S.weight || 0 : w);   // 맨몸(또는 0kg)은 몸무게로 계산
+      const d = parseSets(raw.d);
+      if (d.length) d.forEach((y) => { v += wOf(y.w) * y.r; });   // 세트마다 실제로 든 무게 × 개수
+      else v += wOf(c.w) * c.r * c.s;
     }));
     out.push({ k: days[0], v });
   }
@@ -1103,7 +1174,10 @@ function exStatsHTML() {
         <div class="es-big"><small>${x.bw ? "총 개수" : "추정 1RM"}</small><b>${x.bw ? `${Math.round(x.m1)}회` : `${fmtG(r1(x.m1))}kg`}</b></div>
         ${sparkSVG(series)}
       </div>
-      <p class="es-last">${d.getUTCMonth() + 1}/${d.getUTCDate()} · ${wLabel(x.last.w)} · ${x.last.r}회 · ${x.last.s}${x.last.t ? `/${x.last.t}` : ""}세트</p>
+      <p class="es-last">${d.getUTCMonth() + 1}/${d.getUTCDate()} · ${x.last.d
+        ? x.last.d.map((y) => `<span class="${setLow(y, x.last.tw, x.last.tr) ? "low" : ""}">${setLabel(y)}</span>`).join(" · ")
+        : `${wLabel(x.last.w)} · ${x.last.r}회`} · ${x.last.s}${x.last.t ? `/${x.last.t}` : ""}세트${x.drop >= 0.15 ? ` <b class="es-drop">후반 −${Math.round(x.drop * 100)}%</b>` : ""}</p>
+      ${x.tip ? `<p class="es-tip">${x.tip}</p>` : ""}
       ${nexts}</li>`;
   };
   const cards = groupEx(list).map((gr) => `<section class="es-group"><h3 class="es-gh">${esc(gr.name)}</h3><ul class="es-list">${gr.items.map(card).join("")}</ul></section>`).join("");
@@ -1674,7 +1748,7 @@ function historyHTML() {
   const sd = new Date(keyToUTC(m.sel));
   let detail;
   const hp = cleanParts(h?.parts);
-  const hex = (h?.ex || []).map(cleanEx).filter((x) => x && x.s);
+  const hex = (h?.ex || []).map((raw) => { const c = cleanEx(raw); return c && { ...c, d: raw.d }; }).filter((x) => x && x.s);
   const partsLine = (hp.length ? `<p class="cal-parts"><b>운동</b>${hp.map((x) => `<span class="pchip">${x}</span>`).join("")}</p>` : "") + exListHTML(hex);
   if (!h || (!h.e && !(h.f || []).length)) detail = hp.length || hex.length ? partsLine : `<p class="muted">이 날은 기록이 없어요.</p>`;
   else {
@@ -2188,7 +2262,16 @@ $app.addEventListener("click", async (e) => {
       const list = act === "set" ? S.today.ex : S.yesterday?.ex;
       const e = list?.[Number(b.dataset.j)]; const k = Number(b.dataset.k);
       if (!e) return;
-      e.done = k < e.done ? k : k + 1;
+      const d = parseSets(e.d).map((y) => setStr(y.w, y.r)).slice(0, e.done);
+      while (d.length < e.done) d.push(setStr(e.w, e.r));
+      if (act === "set" && k < e.done) {   // 한 세트를 다시 누르면 고치기 칸 열기/닫기
+        ui.setEdit = ui.setEdit?.id === e.id && ui.setEdit.k === k ? null : { id: e.id, k };
+        return render();
+      }
+      if (k < e.done) { e.done = k; d.length = k; }   // 어제 기록: 누른 세트부터 취소
+      else { while (d.length <= k) d.push(setStr(e.w, e.r)); e.done = k + 1; }   // 그 세트까지 '다음 세트' 값으로 기록
+      e.d = d;
+      if (act === "set") ui.setEdit = null;
       if (act === "set") {
         // 세트를 하면 오늘 분할 부위도 같이 체크
         const plan = todayPlan();
@@ -2205,8 +2288,37 @@ $app.addEventListener("click", async (e) => {
       const e = S.today.ex?.[Number(b.dataset.j)]; if (!e) return;
       e.s = Math.max(1, Math.min(20, e.s + Number(b.dataset.d)));
       e.done = Math.min(e.done, e.s);
+      if (Array.isArray(e.d)) e.d = e.d.slice(0, e.done);
+      if (ui.setEdit?.id === e.id && ui.setEdit.k >= e.done) ui.setEdit = null;
       return commit();
     }
+    case "se": {   // 한 세트의 무게·개수 고치기
+      const e = S.today.ex?.[Number(b.dataset.j)]; const k = ui.setEdit?.k;
+      if (!e || ui.setEdit?.id !== e.id) return;
+      const d = parseSets(e.d); const y = d[k]; if (!y) return;
+      const dir = Number(b.dataset.d);
+      if (b.dataset.f === "r") y.r = Math.max(1, Math.min(999, y.r + dir));   // 0회 세트는 '세트 취소'로
+      else if (y.w != null) {
+        const step = (dir > 0 ? y.w : y.w - 0.01) < LIGHT ? 1 : W_STEP;   // 20kg 아래는 1kg씩, 그 위는 2.5kg씩
+        y.w = Math.max(y.w > 0 ? 1 : 0, r1(y.w + dir * step));   // 무게 운동이 0kg(맨몸 취급)이 되지 않게
+      }
+      e.d = d.map((x) => setStr(x.w, x.r));
+      // 마지막 세트를 고치면 다음 세트도 그 값으로 (고친 것만: 다음 세트에 따로 적은 값은 그대로)
+      if (k === e.done - 1) { if (b.dataset.f === "r") e.r = y.r; else if (e.w != null) e.w = y.w; }
+      return commit();
+    }
+    case "se-del": {   // 그 세트 취소
+      const e = S.today.ex?.[Number(b.dataset.j)]; const k = ui.setEdit?.k;
+      if (!e || ui.setEdit?.id !== e.id) return;
+      const d = parseSets(e.d); if (!d[k]) return;
+      snapshot();
+      d.splice(k, 1);
+      e.d = d.map((x) => setStr(x.w, x.r));
+      e.done = d.length;
+      ui.setEdit = null;
+      return commit(`${k + 1}세트를 취소했어요`, true);
+    }
+    case "se-close": ui.setEdit = null; return render();
     case "lx-del": {
       const j = Number(b.dataset.j); if (!S.today.ex?.[j]) return;
       snapshot(); const n = S.today.ex[j].n; S.today.ex.splice(j, 1);

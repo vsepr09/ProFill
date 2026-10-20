@@ -911,3 +911,20 @@ select { -webkit-appearance: none; appearance: none; min-height: 42px; padding-r
 .lx-add .lx-add-bw { flex: none; border-radius: 8px; padding: 0 12px; }
 .lx-add .lx-add-bw { background: var(--surface); color: var(--muted); border: 1px solid var(--line); }
 .lx-add .lx-add-bw.on { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+
+/* 오늘 한 운동: 세트마다 한 것 */
+.lx-bot .sets { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 6px; }
+.set { min-width: 58px; height: 34px; padding: 0 10px; border-radius: 9px; border: 1.5px dashed var(--line); background: transparent; color: var(--muted); font-size: .82rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+.set.on { border: 1.5px solid var(--accent); background: var(--accent); color: var(--accent-ink); font-weight: 700; }
+.set.on.low { border-color: var(--warn); background: var(--warn-soft); color: var(--warn); }
+.set.editing { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 30%, transparent); }
+.set-ed { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin-top: 8px; padding: 10px 12px; border-radius: 12px; background: var(--surface-2); }
+.set-ed > b { font-size: .88rem; }
+.set-ed .stepper span { min-width: 56px; }
+.set-ed-btns { margin-left: auto; display: inline-flex; align-items: center; gap: 10px; }
+/* 운동 분석: 세트별 기록, 후반 하락, 팁 */
+.es-last .low { color: var(--warn); font-weight: 700; }
+.es-drop { color: var(--warn); font-weight: 700; white-space: nowrap; }
+.es-tip { font-size: .82rem; color: var(--warn); background: var(--warn-soft); border-radius: 10px; padding: 8px 12px; }
+/* 세트별 기록이 길면 줄을 넘김 */
+.ex-list li span:last-child { white-space: normal; text-align: right; }
