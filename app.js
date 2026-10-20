@@ -9,9 +9,9 @@ import {
   collection, getDocs, query, where, onSnapshot, getDocFromCache, getDocFromServer,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 import { firebaseConfig } from "./firebase-config.js";
-import { GOALS, KINDS } from "./data.js?v=1.5.0";
+import { GOALS, KINDS } from "./data.js?v=1.5.2";
 
-const APP_VERSION = "1.5.0";
+const APP_VERSION = "1.5.2";
 /* ---------- Firebase ---------- */
 const fbApp = initializeApp(firebaseConfig);
 const auth = getAuth(fbApp);
@@ -329,7 +329,16 @@ function ensureToday() {
       if (!f) continue;
       items.push({ name: f.name, g: r1(itemG(it, f)), qty: it.qty, eaten: it.eaten, ...(it.pre ? { pre: it.pre } : {}) });
     }
-    S.yesterday = { date: S.today.date, t: S.history[S.today.date]?.t ?? target(), items, parts: cleanParts(S.today.parts), ex: (S.today.ex || []).map(cleanLog).filter(Boolean), done: false };
+    // 운동법 목표가 안 붙은 운동은 지금(올리기 전) 목표를 붙여 둠 (아침에 고쳐도 그날 목표로 판단되게)
+    const ex = (S.today.ex || []).map(cleanLog).filter(Boolean).map((e) => {
+      if (e.tr !== undefined) return e;
+      const tg = progEx(e.n);
+      return tg ? { ...e, tw: tg.w, tr: tg.r, ts: tg.s } : e;
+    });
+    // 식품 정보를 못 찾아 목록에 못 넣은 양 (예: 급식 정보가 없던 날)은 따로 기억
+    const listed = items.reduce((a, it) => a + it.g * it.eaten, 0);
+    const extraE = Math.max(0, r1((S.history[S.today.date]?.e || 0) - listed));
+    S.yesterday = { date: S.today.date, t: S.history[S.today.date]?.t ?? target(), items, parts: cleanParts(S.today.parts), ex, extraE, done: false };
   }
   if (S.today.items.length) S.lastItems = S.today.items.map(slim);
   let items = [];
@@ -832,40 +841,36 @@ const logDone = (list) => (list || []).map(cleanLog).filter((e) => e && e.done)
   });
 const wLabel = (w) => (w == null ? "맨몸" : `${fmtG(w)}kg`);
 
+// 오늘과 어제(아침에 고치기) 모두 같은 모양. 어제 줄의 버튼과 칸에는 data-y="1"이 붙음
 function exLogRowHTML(e, j, yday) {
-  const act = yday ? "yset" : "set";
-  const dots = Array.from({ length: e.s }, (_, k) =>
-    `<button class="dot ${k < e.done ? "on" : ""}" data-act="${act}" data-j="${j}" data-k="${k}" aria-pressed="${k < e.done}" aria-label="${esc(e.n)} ${k + 1}세트"></button>`).join("");
-  if (yday) {
-    return `<li class="lx ${e.done >= e.s ? "done" : ""}"><div class="lx-top"><span class="lx-n">${esc(e.n)}</span><span class="lx-spec">${e.done ? exText({ ...e, s: e.done }) : `${wLabel(e.w)} · ${e.r}회`}</span></div>
-      <div class="lx-bot"><div class="dots">${dots}</div></div></li>`;
-  }
+  const Y = yday ? ` data-y="1"` : "";
+  const editing = ui.setEdit?.id === e.id && !!ui.setEdit.y === !!yday;
   const done = parseSets(e.d);
   const next = { w: e.w, r: e.r };
   const chips = Array.from({ length: e.s }, (_, k) => {
     const y = done[k];
     if (y) {
       const low = setLow(y, e.tw, e.tr);
-      return `<button class="set on ${low ? "low" : ""} ${ui.setEdit?.id === e.id && ui.setEdit.k === k ? "editing" : ""}" data-act="set" data-j="${j}" data-k="${k}" aria-label="${esc(e.n)} ${k + 1}세트 ${setLabel(y)}, 고치기">${setLabel(y)}</button>`;
+      return `<button class="set on ${low ? "low" : ""} ${editing && ui.setEdit.k === k ? "editing" : ""}" data-act="set"${Y} data-j="${j}" data-k="${k}" aria-label="${esc(e.n)} ${k + 1}세트 ${setLabel(y)}, 고치기">${setLabel(y)}</button>`;
     }
-    return `<button class="set" data-act="set" data-j="${j}" data-k="${k}" aria-label="${esc(e.n)} ${k + 1}세트 하기">${setLabel(next)}</button>`;
+    return `<button class="set" data-act="set"${Y} data-j="${j}" data-k="${k}" aria-label="${esc(e.n)} ${k + 1}세트 하기">${setLabel(next)}</button>`;
   }).join("");
   // 한 세트를 다시 누르면 그 세트의 개수·무게를 고치는 칸
-  const ed = ui.setEdit?.id === e.id ? done[ui.setEdit.k] : null;
-  if (ui.setEdit?.id === e.id && !ed) ui.setEdit = null;
+  const ed = editing ? done[ui.setEdit.k] : null;
+  if (editing && !ed) ui.setEdit = null;
   const k = ui.setEdit?.k;
   const editor = ed ? `<div class="set-ed">
       <b>${k + 1}세트</b>
-      ${ed.w == null ? "" : `<span class="stepper sm"><button data-act="se" data-j="${j}" data-f="w" data-d="-1" aria-label="무게 줄이기">−</button><span>${fmtG(ed.w)}kg</span><button data-act="se" data-j="${j}" data-f="w" data-d="1" aria-label="무게 늘리기">+</button></span>`}
-      <span class="stepper sm"><button data-act="se" data-j="${j}" data-f="r" data-d="-1" aria-label="개수 줄이기">−</button><span>${ed.r}회</span><button data-act="se" data-j="${j}" data-f="r" data-d="1" aria-label="개수 늘리기">+</button></span>
-      <span class="set-ed-btns"><button class="link danger" data-act="se-del" data-j="${j}">세트 취소</button><button class="btn primary small" data-act="se-close">완료</button></span>
+      ${ed.w == null ? "" : `<span class="stepper sm"><button data-act="se"${Y} data-j="${j}" data-f="w" data-d="-1" aria-label="무게 줄이기">−</button><span>${fmtG(ed.w)}kg</span><button data-act="se"${Y} data-j="${j}" data-f="w" data-d="1" aria-label="무게 늘리기">+</button></span>`}
+      <span class="stepper sm"><button data-act="se"${Y} data-j="${j}" data-f="r" data-d="-1" aria-label="개수 줄이기">−</button><span>${ed.r}회</span><button data-act="se"${Y} data-j="${j}" data-f="r" data-d="1" aria-label="개수 늘리기">+</button></span>
+      <span class="set-ed-btns"><button class="link danger" data-act="se-del"${Y} data-j="${j}">세트 취소</button><button class="btn primary small" data-act="se-close">완료</button></span>
     </div>` : "";
   return `<li class="lx ${e.done >= e.s ? "done" : ""}">
-    <div class="lx-top"><span class="lx-n">${esc(e.n)}</span><button class="x" data-act="lx-del" data-j="${j}" aria-label="${esc(e.n)} 빼기">×</button></div>
+    <div class="lx-top"><span class="lx-n">${esc(e.n)}</span><button class="x" data-act="lx-del"${Y} data-j="${j}" aria-label="${esc(e.n)} 빼기">×</button></div>
     <div class="lx-bot">
-      <span class="lx-wf">${e.w == null ? `<span class="lx-bw">맨몸</span>` : `<label class="lx-f"><input class="lx-w" data-j="${j}" type="number" inputmode="decimal" min="0" max="500" step="0.5" value="${e.w ? fmtG(e.w) : ""}" placeholder="무게" aria-label="무게"><span>kg</span></label>`}<button class="bw" data-act="lx-bw" data-j="${j}" aria-label="${e.w == null ? "무게로 바꾸기" : "맨몸으로 바꾸기"}">${e.w == null ? "무게" : "맨몸"}</button></span>
-      <label class="lx-f"><input class="lx-r" data-j="${j}" type="number" inputmode="numeric" min="1" max="999" step="1" value="${e.r}" aria-label="개수"><span>회</span></label>
-      <div class="stepper sm"><button data-act="lx-sets" data-j="${j}" data-d="-1" aria-label="세트 줄이기">−</button><span>${e.s}세트</span><button data-act="lx-sets" data-j="${j}" data-d="1" aria-label="세트 늘리기">+</button></div>
+      <span class="lx-wf">${e.w == null ? `<span class="lx-bw">맨몸</span>` : `<label class="lx-f"><input class="lx-w"${Y} data-j="${j}" type="number" inputmode="decimal" min="0" max="500" step="0.5" value="${e.w ? fmtG(e.w) : ""}" placeholder="무게" aria-label="무게"><span>kg</span></label>`}<button class="bw" data-act="lx-bw"${Y} data-j="${j}" aria-label="${e.w == null ? "무게로 바꾸기" : "맨몸으로 바꾸기"}">${e.w == null ? "무게" : "맨몸"}</button></span>
+      <label class="lx-f"><input class="lx-r"${Y} data-j="${j}" type="number" inputmode="numeric" min="1" max="999" step="1" value="${e.r}" aria-label="개수"><span>회</span></label>
+      <div class="stepper sm"><button data-act="lx-sets"${Y} data-j="${j}" data-d="-1" aria-label="세트 줄이기">−</button><span>${e.s}세트</span><button data-act="lx-sets"${Y} data-j="${j}" data-d="1" aria-label="세트 늘리기">+</button></div>
       <div class="sets">${chips}</div>
     </div>${editor}</li>`;
 }
@@ -1041,7 +1046,8 @@ function overload(all, tg) {
     if (bw) return { kind: "down", w: null, r: Math.max(1, base.r - 2), s: base.s, why };
     if (light && base.r > lo) return { kind: "down", w: base.w, r: lo, s: base.s, lo, why };
     let w2 = round25(base.w * 0.9);
-    if (w2 >= base.w) w2 = Math.max(0, r1(base.w - W_STEP));
+    if (w2 >= base.w) w2 = r1(base.w - W_STEP);
+    w2 = Math.max(Math.min(1, base.w), w2);   // 0kg(맨몸 취급)로는 내리지 않음
     return { kind: "down", w: w2, r: base.r, s: base.s, ...(light ? { lo } : {}), why };
   }
   if (!recent.length) return hold("새 목표로 시작해요");
@@ -1092,7 +1098,7 @@ function exStats() {
     const heavy = drops.filter((v) => v >= 0.25).length;
     const tip = drops.length >= 3 && heavy === 3 ? "세 번 연속 후반에 많이 떨어져요. 세트를 하나 줄이고 무게는 유지해 보세요."
       : heavy >= 2 ? "후반 세트에서 많이 떨어져요. 세트 사이 쉬는 시간을 2~3분으로 늘려 보세요." : "";
-    return { n, ss, bw, last, best, m1, change, prs, status, drop, tip, nexts: nextsOf(n, all) };
+    return { n, ss, bw, last, best, m1, change, prs, status, drop, tip, metric, nexts: nextsOf(n, all) };
   }).sort((a, b) => (a.last.k < b.last.k ? 1 : a.last.k > b.last.k ? -1 : a.n.localeCompare(b.n)));
 }
 // 주별 볼륨 (무게 × 개수 × 세트, 최근 6주)
@@ -1162,7 +1168,7 @@ function exStatsHTML() {
   const card = (x) => {
     const [label, cls] = STATUS[x.status];
     const d = new Date(keyToUTC(x.last.k));
-    const series = x.ss.slice(-10).map((s) => (x.bw ? s.r * s.s : e1rm(s.w, s.r)));
+    const series = x.ss.slice(-10).map(x.metric);
     const nexts = x.nexts.map(({ tg, nx, label }, i) => `
       <div class="es-next ${nx.kind}">
         <div><small>${label ? `${esc(label)} · ` : ""}다음 목표 · ${NEXT[nx.kind]}</small><b>${wLabel(nx.w)} · ${nx.r}회 · ${nx.s}세트</b><span>${nx.why}</span></div>
@@ -1430,15 +1436,23 @@ function ydayActive() {
   const prog = cleanProgram(S.program);
   return !!prog && prog.sched[(new Date(keyToUTC(y.date)).getUTCDay() + 6) % 7] >= 0;
 }
+// 어제 먹은 것을 고쳤을 때: 먹은 양과 식품 목록, 운동까지 다시 계산
 function ydayRecalc() {
   const y = S.yesterday;
-  let e = 0; const f = [];
+  let e = Number(y.extraE) || 0; const f = [];
   for (const it of y.items) {
     if (!it.eaten) continue;
     e += it.g * it.eaten;
     f.push({ n: it.name, g: r1(it.g * it.eaten) });
   }
   S.history[y.date] = { e: r1(e), t: y.t, f, parts: cleanParts(y.parts), ex: logDone(y.ex) };
+}
+// 어제 운동만 고쳤을 때: 먹은 양은 건드리지 않고 운동과 부위만
+function ydayRecalcEx() {
+  const y = S.yesterday;
+  const h = (S.history[y.date] ||= { e: 0, t: y.t, f: [] });
+  h.parts = cleanParts(y.parts);
+  h.ex = logDone(y.ex);
 }
 function ydayHTML() {
   const y = S.yesterday;
@@ -1459,7 +1473,7 @@ function ydayHTML() {
     ${rows ? `<ul class="ck-list">${rows}</ul>` : ""}
     ${cleanProgram(S.program) ? `<h3 class="yd-parts-h">어제 운동한 부위</h3>
     <div class="parts small-parts">${shownParts(cleanParts(y.parts)).map((p) => { const on = (y.parts || []).includes(p); return `<button class="part ${on ? "on" : ""}" data-act="ypart" data-p="${p}" aria-pressed="${on}"><span class="pn">${p}</span></button>`; }).join("")}</div>` : ""}
-    ${(y.ex || []).length ? `<h3 class="yd-parts-h">어제 한 운동</h3><ul class="lx-list">${y.ex.map((e, j) => exLogRowHTML(cleanLog(e) || e, j, true)).join("")}</ul>` : ""}
+    ${(y.ex || []).length && S.showWorkout !== false ? `<h3 class="yd-parts-h">어제 한 운동</h3><ul class="lx-list">${y.ex.map((e, j) => exLogRowHTML(cleanLog(e) || e, j, true)).join("")}</ul>` : ""}
     <div class="yd-actions"><button class="btn primary" data-act="yday-done">다 맞아요</button></div>`;
 }
 
@@ -2001,7 +2015,7 @@ function toast(msg, undo = false) {
     el.setAttribute("role", "status"); el.setAttribute("aria-live", "polite");
     document.body.appendChild(el);
     el.addEventListener("click", (e) => {
-      if (!e.target.closest("[data-undo]") || !undoFn) return;
+      if (!e.target.closest("[data-undo]") || !undoFn || resuming) return;
       const f = undoFn; undoFn = null; f();
     });
   }
@@ -2029,6 +2043,24 @@ function dismissModal() {
   render();
   if (!ui.modal && remotePending) applyRemote(remotePending);
 }
+// 적던 숫자 칸에서 커서를 빼서 값을 저장 (아이패드는 버튼을 눌러도 커서가 안 빠짐)
+function blurLogInput(except) {
+  const ae = document.activeElement;
+  if (ae && ae !== except && ae.matches?.(".lx-w, .lx-r, .hg")) ae.blur();
+}
+// 운동 기록 한 줄 (data-y가 있으면 어제 목록). 세트 기록 모양을 맞춰서 돌려줌
+function logEntry(b) {
+  const list = b.dataset.y ? S.yesterday?.ex : S.today.ex;
+  const j = Number(b.dataset.j);
+  if (!list?.[j]) return null;
+  list[j] = cleanLog(list[j]) || list[j];
+  return list[j];
+}
+// 어제 목록을 고쳤으면 어제 기록도 다시 계산
+function commitLog(b, msg, undo = false) {
+  if (b.dataset?.y && S.yesterday) ydayRecalcEx();
+  return commit(msg, undo);
+}
 function commit(msg, undo = false) { save(); render(); if (msg) toast(msg, undo); }
 
 $app.addEventListener("click", async (e) => {
@@ -2036,8 +2068,7 @@ $app.addEventListener("click", async (e) => {
   if (!b || !b.dataset.act) return;
   if (resuming) return;   // 최신 기록을 받아 오는 중
   // 아이패드는 버튼을 눌러도 입력칸에서 포커스가 안 빠져서, 적던 무게나 개수가 저장 전에 사라짐 → 먼저 반영
-  const ae = document.activeElement;
-  if (ae && ae !== b && ae.matches?.(".lx-w, .lx-r, .hg")) ae.blur();
+  blurLogInput(b);
   // 자정이 지났으면 먼저 새 하루로 (어제 기록에 잘못 들어가지 않게)
   if (S && S.today.date !== dateKey()) { tick(); return; }
   if (S && !writing && !saveTimer) {
@@ -2258,21 +2289,19 @@ $app.addEventListener("click", async (e) => {
       }
       return;
     }
-    case "set": case "yset": {
-      const list = act === "set" ? S.today.ex : S.yesterday?.ex;
-      const e = list?.[Number(b.dataset.j)]; const k = Number(b.dataset.k);
+    case "set": {
+      const e = logEntry(b); const k = Number(b.dataset.k);
       if (!e) return;
-      const d = parseSets(e.d).map((y) => setStr(y.w, y.r)).slice(0, e.done);
-      while (d.length < e.done) d.push(setStr(e.w, e.r));
-      if (act === "set" && k < e.done) {   // 한 세트를 다시 누르면 고치기 칸 열기/닫기
-        ui.setEdit = ui.setEdit?.id === e.id && ui.setEdit.k === k ? null : { id: e.id, k };
+      const yd = !!b.dataset.y;
+      if (k < e.done) {   // 한 세트를 다시 누르면 고치기 칸 열기/닫기
+        ui.setEdit = ui.setEdit?.id === e.id && !!ui.setEdit.y === yd && ui.setEdit.k === k ? null : { id: e.id, k, y: yd };
         return render();
       }
-      if (k < e.done) { e.done = k; d.length = k; }   // 어제 기록: 누른 세트부터 취소
-      else { while (d.length <= k) d.push(setStr(e.w, e.r)); e.done = k + 1; }   // 그 세트까지 '다음 세트' 값으로 기록
-      e.d = d;
-      if (act === "set") ui.setEdit = null;
-      if (act === "set") {
+      const d = e.d.slice(0, e.done);
+      while (d.length <= k) d.push(setStr(e.w, e.r));   // 그 세트까지 '다음 세트' 값으로 기록
+      e.d = d; e.done = k + 1;
+      ui.setEdit = null;
+      if (!yd) {
         // 세트를 하면 오늘 분할 부위도 같이 체크
         const plan = todayPlan();
         if (e.done && plan?.split) S.today.parts = cleanParts([...todayParts(), ...plan.split.parts]);
@@ -2280,21 +2309,21 @@ $app.addEventListener("click", async (e) => {
         const plan = cleanProgram(S.program);
         const sp = plan?.splits[plan.sched[(new Date(keyToUTC(S.yesterday.date)).getUTCDay() + 6) % 7]];
         if (e.done && sp) S.yesterday.parts = cleanParts([...cleanParts(S.yesterday.parts), ...sp.parts]);
-        ydayRecalc();
+        ydayRecalcEx();
       }
       return commit();
     }
     case "lx-sets": {
-      const e = S.today.ex?.[Number(b.dataset.j)]; if (!e) return;
+      const e = logEntry(b); if (!e) return;
       e.s = Math.max(1, Math.min(20, e.s + Number(b.dataset.d)));
       e.done = Math.min(e.done, e.s);
-      if (Array.isArray(e.d)) e.d = e.d.slice(0, e.done);
+      e.d = e.d.slice(0, e.done);
       if (ui.setEdit?.id === e.id && ui.setEdit.k >= e.done) ui.setEdit = null;
-      return commit();
+      return commitLog(b);
     }
     case "se": {   // 한 세트의 무게·개수 고치기
-      const e = S.today.ex?.[Number(b.dataset.j)]; const k = ui.setEdit?.k;
-      if (!e || ui.setEdit?.id !== e.id) return;
+      const e = logEntry(b); const k = ui.setEdit?.k;
+      if (!e || ui.setEdit?.id !== e.id || !!ui.setEdit.y !== !!b.dataset.y) return;
       const d = parseSets(e.d); const y = d[k]; if (!y) return;
       const dir = Number(b.dataset.d);
       if (b.dataset.f === "r") y.r = Math.max(1, Math.min(999, y.r + dir));   // 0회 세트는 '세트 취소'로
@@ -2305,24 +2334,25 @@ $app.addEventListener("click", async (e) => {
       e.d = d.map((x) => setStr(x.w, x.r));
       // 마지막 세트를 고치면 다음 세트도 그 값으로 (고친 것만: 다음 세트에 따로 적은 값은 그대로)
       if (k === e.done - 1) { if (b.dataset.f === "r") e.r = y.r; else if (e.w != null) e.w = y.w; }
-      return commit();
+      return commitLog(b);
     }
     case "se-del": {   // 그 세트 취소
-      const e = S.today.ex?.[Number(b.dataset.j)]; const k = ui.setEdit?.k;
-      if (!e || ui.setEdit?.id !== e.id) return;
+      const e = logEntry(b); const k = ui.setEdit?.k;
+      if (!e || ui.setEdit?.id !== e.id || !!ui.setEdit.y !== !!b.dataset.y) return;
       const d = parseSets(e.d); if (!d[k]) return;
       snapshot();
       d.splice(k, 1);
       e.d = d.map((x) => setStr(x.w, x.r));
       e.done = d.length;
       ui.setEdit = null;
-      return commit(`${k + 1}세트를 취소했어요`, true);
+      return commitLog(b, `${k + 1}세트를 취소했어요`, true);
     }
     case "se-close": ui.setEdit = null; return render();
     case "lx-del": {
-      const j = Number(b.dataset.j); if (!S.today.ex?.[j]) return;
-      snapshot(); const n = S.today.ex[j].n; S.today.ex.splice(j, 1);
-      return commit(`${eul(n)} 뺐어요`, true);
+      const list = b.dataset.y ? S.yesterday?.ex : S.today.ex;
+      const j = Number(b.dataset.j); if (!list?.[j]) return;
+      snapshot(); const n = list[j].n; list.splice(j, 1);
+      return commitLog(b, `${eul(n)} 뺐어요`, true);
     }
     case "lx-quick": {
       const q = quickAdds().find((x) => x.key === b.dataset.k); if (!q) return;
@@ -2334,14 +2364,15 @@ $app.addEventListener("click", async (e) => {
     case "lx-add-cancel": ui.lxAdd = false; ui.lxName = ""; return render();
     case "lx-add-bw": {   // 다시 그리지 않고 버튼만 바꿔서 적던 이름을 지키기
       ui.lxBw = !ui.lxBw;
-      b.classList.toggle("on", ui.lxBw); b.setAttribute("aria-pressed", String(ui.lxBw));
+      const tb = document.querySelector('[data-act="lx-add-bw"]');
+      if (tb) { tb.classList.toggle("on", ui.lxBw); tb.setAttribute("aria-pressed", String(ui.lxBw)); }
       document.getElementById("lx-name")?.focus();
       return;
     }
     case "lx-bw": {
-      const e = S.today.ex?.[Number(b.dataset.j)]; if (!e) return;
+      const e = logEntry(b); if (!e) return;
       e.w = e.w == null ? (e.tw || lastOf(e.n)?.w || 0) : null;
-      return commit();
+      return commitLog(b);
     }
     case "lx-add-save": {
       const n = val("lx-name").trim(); if (!n) return;
@@ -2522,9 +2553,11 @@ $app.addEventListener("change", (e) => {
     return commit();
   }
   if (!t.classList.contains("lx-w") && !t.classList.contains("lx-r")) return;
-  const ex = S?.today.ex?.[Number(t.dataset.j)]; if (!ex) return;
+  if (!S) return;
+  const ex = logEntry(t); if (!ex) return;
   if (t.classList.contains("lx-w")) ex.w = r1(num(t.value, 0, 500));
   else ex.r = Math.max(1, Math.round(num(t.value, 1, 999)));
+  if (t.dataset.y && S.yesterday) ydayRecalcEx();
   save();
 });
 $app.addEventListener("focusin", (e) => {
@@ -2561,16 +2594,18 @@ function tick() {
     toast(autoMsg || "새로운 하루예요. 체크리스트를 새로 시작했어요."); autoMsg = "";
     return;
   }
+  // 낮 12시가 지나면 어제 기록 칸 닫기
+  if (document.querySelector(".yday") && !ydayActive()) { softRender(); return; }
   const plan = document.getElementById("plan");
   if (plan && !ui.modal) plan.outerHTML = planBlockHTML();
 }
 setInterval(tick, 30000);
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "hidden") { hiddenAt = Date.now(); flushSave(); return; }
+  if (document.visibilityState === "hidden") { hiddenAt = Date.now(); blurLogInput(); flushSave(); return; }
   resume();
   if (S) watchFriends();
 });
-window.addEventListener("pagehide", () => { hiddenAt = Date.now(); flushSave(); });
+window.addEventListener("pagehide", () => { hiddenAt = Date.now(); blurLogInput(); flushSave(); });
 // 사파리가 저장해 둔 페이지를 다시 보여 줄 때도 최신 기록부터
 window.addEventListener("pageshow", (e) => { if (e.persisted) { hiddenAt = 1; resume(); } });
 
