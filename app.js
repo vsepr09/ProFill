@@ -9,9 +9,9 @@ import {
   collection, getDocs, query, where, onSnapshot, getDocFromCache, getDocFromServer,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 import { firebaseConfig } from "./firebase-config.js";
-import { GOALS, KINDS } from "./data.js?v=1.6.0";
+import { GOALS, KINDS } from "./data.js?v=1.6.1";
 
-const APP_VERSION = "1.6.0";
+const APP_VERSION = "1.6.1";
 /* ---------- Firebase ---------- */
 const fbApp = initializeApp(firebaseConfig);
 const auth = getAuth(fbApp);
@@ -203,6 +203,45 @@ const setBase = (d) => { baseAt = Number(d?.updatedAt) || 0; };
 // 서버 기록으로 통째로 바꿀 때 (되돌리기도 지움: 옛 상태로 덮어쓰지 않게)
 function adopt(data) { S = migrate(data); setBase(S); keepShared(data); undoFn = null; applyTheme(S.theme); }
 
+/* ---------- 백업: 기록이 잘못 지워져도 되살릴 수 있게 ----------
+   이 기기: 앱을 열 때, 합치기 전, 막은 저장 등 중요한 순간의 기록을 최근 6개까지 보관
+   서버: 하루에 한 번 users/{uid}/backups/{날짜}에 보관 (최근 14일) */
+const bkKey = () => `pf-backups-${uid}`;
+const sizeOf = (d) => ({ days: Object.keys(d?.history || {}).length, foods: (d?.customFoods || []).length, weight: d?.weight || null });
+function readBackups() { try { return JSON.parse(localStorage.getItem(bkKey())) || []; } catch (e) { return []; } }
+function backupLocal(d, tag) {
+  if (!d || !uid) return;
+  const info = sizeOf(d);
+  if (!info.days && !info.weight) return;   // 빈 기록은 남기지 않음
+  const ver = Number(d.updatedAt) || 0;
+  let list = readBackups().filter((b) => !(b.ver === ver && b.days === info.days));
+  list.unshift({ at: Date.now(), tag, ver, ...info, data: JSON.parse(JSON.stringify(d)) });
+  list = list.slice(0, 6);
+  while (list.length) {
+    try { localStorage.setItem(bkKey(), JSON.stringify(list)); break; } catch (e) { list.pop(); }   // 공간이 모자라면 오래된 것부터 뺌
+  }
+}
+async function backupServer(d) {
+  const k = dateKey(), mark = `pf-srvbk-${uid}`;
+  try { if (localStorage.getItem(mark) === k) return; } catch (e) { /* 그냥 진행 */ }
+  const info = sizeOf(d);
+  if (!info.days && !info.weight) return;
+  try {
+    await setDoc(doc(db, "users", uid, "backups", k), { at: Date.now(), ...info, data: JSON.parse(JSON.stringify(d)) });
+    try { localStorage.setItem(mark, k); } catch (e) { /* 다음에 또 함 */ }
+    // 14일보다 오래된 백업은 지움
+    const snap = await getDocs(collection(db, "users", uid, "backups"));
+    const old = snap.docs.map((x) => x.id).sort().reverse().slice(14);
+    for (const id of old) deleteDoc(doc(db, "users", uid, "backups", id)).catch(() => {});
+  } catch (e) { console.warn("backup", e); }   // 규칙을 아직 안 바꿨으면 조용히 넘어감
+}
+// 갑자기 기록이 크게 줄어드는 저장은 막음 (버그가 있어도 서버 기록이 지워지지 않게)
+function looksLikeWipe(next, prev) {
+  if (!prev || !next) return false;
+  const a = sizeOf(prev), b = sizeOf(next);
+  return (a.days >= 3 && b.days < a.days - 2) || (!!a.weight && !b.weight) || (a.foods >= 3 && b.foods === 0 && a.days >= 3 && b.days < a.days);
+}
+
 /* ---------- 두 기기 기록 합치기 ----------
    인터넷이 끊긴 동안 이 기기에서 한 것과, 그사이 다른 기기가 서버에 저장한 것을 둘 다 살림.
    shared = 두 기기가 마지막으로 함께 본 서버 기록 (이 기기에 따로 보관해서 앱을 다시 열어도 남음) */
@@ -317,9 +356,23 @@ function merge3Obj(b, l, r) {
 function mergeIn(r) {
   const mine = S;
   const remote = stripVer(migrate(JSON.parse(JSON.stringify(r))));
+  // 다른 기기(예: 버그가 있던 옛 버전)가 기록을 크게 지운 걸 보냈으면 받지 않고, 이 기기 기록으로 서버를 되돌림
+  if (mine && looksLikeWipe(remote, stripVer(mine))) {
+    backupLocal(r, "막은 서버 기록");
+    backupLocal(mine, "이 기기 기록");
+    setBase(r); keepShared(r);
+    S.base = r.base; S.updatedAt = r.updatedAt;
+    save();
+    setTimeout(() => toast("다른 기기에서 기록이 크게 줄어든 걸 막고, 이 기기 기록으로 되돌렸어요"), 300);
+    return true;
+  }
   // 함께 본 기록이 없으면(이 기기에서 처음 등) 서버와 다른 게 있는지로 판단해서, 지우지 않고 모음
   const changed = mine && (shared ? !same(stripVer(mine), stripVer(shared)) : !same(stripVer(mine), remote));
-  if (!changed) { adopt(r); return false; }
+  if (!changed) {
+    if (sizeOf(r).days < sizeOf(mine).days - 2) backupLocal(mine, "서버 기록 받기 전");
+    adopt(r); return false;
+  }
+  backupLocal(mine, "합치기 전");
   let merged;
   try {
     merged = merge3(shared ? stripVer(shared) : undefined, stripVer(mine), remote);
@@ -366,6 +419,15 @@ async function flushSave() {
   if (!saveTimer || !S || !uid || deleting) return;
   if (resuming) { save(); return; }   // 최신 기록을 받아 오는 중이면 조금 뒤에
   clearTimeout(saveTimer); saveTimer = null;
+  if (looksLikeWipe(S, shared)) {
+    backupLocal(S, "막은 저장");
+    backupLocal(shared, "막기 전 서버 기록");
+    console.warn("blocked wipe", sizeOf(S), sizeOf(shared));
+    adopt(shared);   // 서버에 있던 기록으로 돌림
+    render();
+    toast("기록이 갑자기 많이 줄어드는 저장을 막았어요. 설정 → 기록 되살리기에서 확인할 수 있어요.");
+    return;
+  }
   S.base = baseAt;
   S.updatedAt = Math.max(Date.now(), baseAt + 1);
   baseAt = S.updatedAt;
@@ -376,6 +438,7 @@ async function flushSave() {
   try {
     await setDoc(doc(db, "users", who), data);
     if (uid === who && baseAt === data.updatedAt) keepShared(data);   // 서버가 받은 기록 = 함께 본 기록
+    if (uid === who) backupServer(data);
     // 내 저장 뒤에 다른 기기가 또 저장한 게 기다리고 있으면 남겨 둠
     if (!(remotePending && Number(remotePending.updatedAt) > data.updatedAt)) remotePending = null;
   } catch (e) {
@@ -394,7 +457,7 @@ async function flushSave() {
 let reloading = null, needReload = false;
 // 서버가 거절한(아직 합치지 못한) 이 기기 기록: 앱이 닫혀도 다음에 열 때 합칠 수 있게 보관
 const unsyncedKey = () => `pf-unsynced-${uid}`;
-function keepUnsynced() { try { localStorage.setItem(unsyncedKey(), JSON.stringify(S)); } catch (e) { /* 공간 부족 */ } }
+function keepUnsynced() { try { localStorage.setItem(unsyncedKey(), JSON.stringify({ ...S, base: shared?.updatedAt ?? S.base })); } catch (e) { /* 공간 부족 */ } }
 function takeUnsynced() {
   try { const v = JSON.parse(localStorage.getItem(unsyncedKey())); localStorage.removeItem(unsyncedKey()); return v; } catch (e) { return null; }
 }
@@ -2007,10 +2070,36 @@ function historyHTML() {
 
 function modalHTML() {
   const m = ui.modal;
-  const inner = m.type === "settings" ? settingsHTML(m.first) : m.type === "routines" ? routinesHTML() : m.type === "history" ? historyHTML() : m.type === "friend" ? friendHTML() : m.type === "friends" ? friendsModalHTML() : m.type === "report" ? reportHTML(false) : m.type === "guide" ? guideHTML() : m.type === "program" ? programHTML() : m.type === "exstats" ? exStatsHTML() : infoHTML();
+  const inner = m.type === "settings" ? settingsHTML(m.first) : m.type === "routines" ? routinesHTML() : m.type === "history" ? historyHTML() : m.type === "friend" ? friendHTML() : m.type === "friends" ? friendsModalHTML() : m.type === "report" ? reportHTML(false) : m.type === "guide" ? guideHTML() : m.type === "program" ? programHTML() : m.type === "exstats" ? exStatsHTML() : m.type === "restore" ? restoreHTML() : infoHTML();
   return `<div class="modal-back" data-act="${m.first ? "" : "backdrop"}"><div class="modal modal-${m.type}" role="dialog" aria-modal="true">${inner}</div></div>`;
 }
 
+// 기록 되살리기: 이 기기 백업 + 서버 백업 중에서 골라 되돌림
+function restoreHTML() {
+  const fmt = (t) => { const d = new Date(t + 9 * 3600e3); return `${d.getUTCMonth() + 1}/${d.getUTCDate()} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`; };
+  const now = sizeOf(S);
+  const row = (b, src, i) => `<li class="rs-row"><div><b>${fmt(b.at)}</b> <span class="muted small">${esc(b.tag || (src === "s" ? "서버 하루 백업" : ""))}</span>
+      <small>기록 ${b.days}일 · 내 식품 ${b.foods}개${b.weight ? ` · ${b.weight}kg` : ""}</small></div>
+      <button class="btn small" data-act="restore-do" data-src="${src}" data-i="${i}">되살리기</button></li>`;
+  const local = readBackups();
+  const srv = ui.restoreSrv;
+  return `<h2>기록 되살리기</h2>
+    <p class="muted small">지금: 기록 ${now.days}일 · 내 식품 ${now.foods}개. 되살리면 그 시점 기록으로 바뀌고, 지금 기록은 백업에 남아요.</p>
+    <h3>이 기기 백업</h3>
+    ${local.length ? `<ul class="rs-list">${local.map((b, i) => row(b, "l", i)).join("")}</ul>` : `<p class="muted small">아직 없어요.</p>`}
+    <h3>서버 백업 (하루 한 번)</h3>
+    ${srv === undefined ? `<p class="muted small">불러오는 중…</p>` : srv === null ? `<p class="muted small">불러오지 못했어요. 인터넷 연결과 Firebase 규칙을 확인해 주세요.</p>`
+      : srv.length ? `<ul class="rs-list">${srv.map((b, i) => row(b, "s", i)).join("")}</ul>` : `<p class="muted small">아직 없어요.</p>`}
+    <div class="modal-actions"><button class="btn primary" data-act="close-modal">닫기</button></div>`;
+}
+async function loadServerBackups() {
+  ui.restoreSrv = undefined;
+  try {
+    const snap = await getDocs(collection(db, "users", uid, "backups"));
+    ui.restoreSrv = snap.docs.map((x) => ({ id: x.id, ...x.data() })).filter((b) => b.data).sort((a, b) => b.at - a.at);
+  } catch (e) { console.warn("backups", e); ui.restoreSrv = null; }
+  if (ui.modal?.type === "restore") render();
+}
 function settingsDraft() {
   return {
     nick: S.nickname, weight: S.weight ?? "", goal: S.goal, customFactor: S.customFactor ?? 2, rollover: S.rollover,
@@ -2094,7 +2183,7 @@ function settingsHTML(first) {
           <div class="row-inline"><input type="password" id="del-pw" autocomplete="current-password" placeholder="비밀번호" aria-label="비밀번호">
             <button class="btn danger" data-act="delete-account">영구 삭제</button><button class="btn ghost" data-act="delete-cancel">그만두기</button></div>
           <p class="form-err" id="del-err"></p>`
-        : `<div class="acct-links"><button class="link left" data-act="open-guide">사용법 다시 보기</button><button class="link left" data-act="logout">로그아웃</button>${d.pwStep ? "" : `<button class="link left" data-act="pw-start">비밀번호 바꾸기</button>`}<button class="link danger left" data-act="delete-start">계정 삭제</button></div>`}
+        : `<div class="acct-links"><button class="link left" data-act="open-guide">사용법 다시 보기</button><button class="link left" data-act="logout">로그아웃</button>${d.pwStep ? "" : `<button class="link left" data-act="pw-start">비밀번호 바꾸기</button>`}<button class="link left" data-act="open-restore">기록 되살리기</button><button class="link danger left" data-act="delete-start">계정 삭제</button></div>`}
         ${d.pwStep && !d.delStep ? `<div class="pw-box">
           <input type="password" id="pw-cur" autocomplete="current-password" placeholder="지금 비밀번호" aria-label="지금 비밀번호">
           <input type="password" id="pw-new" autocomplete="new-password" placeholder="새 비밀번호 (6자 이상)" aria-label="새 비밀번호">
@@ -2365,6 +2454,19 @@ $app.addEventListener("click", async (e) => {
     case "meal-day": ui.mealDay = Number(b.dataset.d); return render();
     case "share-on": S.shareProgress = true; commit("이제 친구들과 달성률을 같이 봐요"); watchFriends(); return;
     case "open-me": ui.modal = { type: "friend", id: uid }; return render();
+    case "open-restore": ui.modal = { type: "restore" }; render(); loadServerBackups(); return;
+    case "restore-do": {
+      const b0 = (b.dataset.src === "s" ? ui.restoreSrv : readBackups())?.[Number(b.dataset.i)];
+      if (!b0?.data) return;
+      backupLocal(S, "되살리기 전");
+      const keep = { base: S.base, updatedAt: S.updatedAt };
+      S = migrate({ ...JSON.parse(JSON.stringify(b0.data)), ...keep });
+      shared = null;   // 되살린 기록은 '지우는 저장 막기'에 걸리지 않게 (기준을 새로 잡음)
+      applyTheme(S.theme);
+      ensureToday();
+      ui.modal = null;
+      return commit("기록을 되살렸어요");
+    }
     case "friend-detail": ui.modal = { type: "friend", id: b.dataset.id, back: ui.modal?.type === "friends" ? ui.modal : null }; return render();
     case "open-friends": ui.modal = { type: "friends" }; if (!unsubFriends) loadFriends(); return render();
     case "back-modal": ui.modal = ui.modal.back; return render();
@@ -2495,7 +2597,12 @@ $app.addEventListener("click", async (e) => {
       stopWatching();
       try {
         await deleteDoc(doc(db, "public", who));
+        try {   // 백업도 함께 지움
+          const bk = await getDocs(collection(db, "users", who, "backups"));
+          await Promise.all(bk.docs.map((x) => deleteDoc(doc(db, "users", who, "backups", x.id))));
+        } catch (e3) { console.warn("backups", e3); }
         await deleteDoc(doc(db, "users", who));
+        try { [bkKey(), sharedKey(), unsyncedKey(), `pf-srvbk-${who}`].forEach((k) => localStorage.removeItem(k)); } catch (e3) { /* 없음 */ }
         await deleteUser(user);
         ui.modal = null;
         setTimeout(() => toast("계정을 삭제했어요"), 300);
@@ -2859,26 +2966,51 @@ onAuthStateChanged(auth, async (user) => {
   uid = user.uid; S = null; render();
   try {
     const ref = doc(db, "users", uid);
+    // 서버 기록을 받기 전에, 이 기기에 남아 있던 기록을 백업 (다른 기기에서 기록이 지워졌어도 되살릴 수 있게)
+    const cachedP = getDocFromCache(ref).then((c) => {
+      if (!c.exists()) return null;
+      backupLocal(c.data(), "이 기기에 있던 기록");
+      return c.data();
+    }).catch(() => null);
     // 인터넷이 없거나 느리면(와이파이만 잡히고 인터넷이 안 될 때) 4초 뒤 기기에 저장된 기록으로 열기
     const fromServer = navigator.onLine === false ? Promise.reject(new Error("offline"))
       : Promise.race([getDoc(ref), new Promise((_, no) => setTimeout(() => no(new Error("slow")), 4000))]);
     const userDoc = fromServer.catch(() => getDocFromCache(ref)).catch(() => getDoc(ref));
-    const [snap] = await Promise.all([userDoc, mealsReady || loadMeals()]);
+    let [snap] = await Promise.all([userDoc, mealsReady || loadMeals()]);
     if (uid !== user.uid) return;
+    // '기록 없음'은 서버에 직접 확인한 뒤에만 새 계정으로 봄 (기기 사본만 보고 빈 기록으로 시작해서 덮어쓰지 않게)
+    if (!snap.exists() && snap.metadata?.fromCache) {
+      const sv = await getDocFromServer(ref);
+      if (uid !== user.uid) return;
+      snap = sv;
+    }
     const isNew = !snap.exists();
     S = isNew ? freshData(pendingNick || user.email.split("@")[0]) : migrate(snap.data());
     setBase(isNew ? null : S);
+    // 서버 기록이 이 기기에 남아 있던 기록보다 크게 줄었으면(다른 기기에서 잘못 지워짐) 두 기록을 모아서 되살림
+    const cached = await cachedP;
+    let healed = false;
+    if (!isNew && cached && !snap.metadata?.fromCache && looksLikeWipe(stripVer(migrate(JSON.parse(JSON.stringify(snap.data())))), stripVer(migrate(JSON.parse(JSON.stringify(cached)))))) {
+      backupLocal(snap.data(), "지워진 서버 기록");
+      const both = merge3(undefined, stripVer(migrate(JSON.parse(JSON.stringify(cached)))), stripVer(migrate(JSON.parse(JSON.stringify(snap.data())))));
+      S = migrate({ ...both, base: snap.data().base, updatedAt: snap.data().updatedAt });
+      healed = true;
+    }
     // 함께 본 기록: 서버에서 바로 받았으면 그것, 기기 사본(보내지 못한 저장이 섞였을 수 있음)이면 보관해 둔 것
     const prevShared = isNew ? null : loadShared();   // 지난번에 함께 본 기록 (합치지 못한 기록이 있으면 이걸 기준으로)
     if (isNew) shared = null;
-    else if (!snap.metadata?.fromCache && !snap.metadata?.hasPendingWrites) keepShared(snap.data());
+    else if (!snap.metadata?.fromCache && !snap.metadata?.hasPendingWrites) { keepShared(snap.data()); backupLocal(snap.data(), "서버 기록"); }
     else shared = loadShared() || (snap.metadata?.hasPendingWrites ? null : JSON.parse(JSON.stringify(snap.data())));
     if (!isNew && !snap.metadata?.fromCache) {
       const left = takeUnsynced();
-      if (left && Number(left.updatedAt || 0) !== Number(snap.data().updatedAt || 0)) { shared = prevShared; S = migrate(left); mergeIn(snap.data()); }
+      // 보관할 때 기준이던 기록(prevShared)이 그대로일 때만 합침. 그 뒤로 기록이 더 진행됐으면 오래된 사본이라 합치지 않음(백업만)
+      if (left && prevShared && Number(left.base) === Number(prevShared.updatedAt) && Number(left.updatedAt || 0) !== Number(snap.data().updatedAt || 0)) {
+        shared = prevShared; S = migrate(left); mergeIn(snap.data());
+      } else if (left) backupLocal(left, "합치지 못한 기록");
     }
     applyTheme(S.theme);
-    if (ensureToday() || isNew) save();
+    if (ensureToday() || isNew || healed) save();
+    if (healed) setTimeout(() => toast("서버에서 지워진 기록을 이 기기에 남아 있던 기록으로 되살렸어요"), 500);
     if (!S.weight) ui.modal = { type: "settings", first: true, draft: settingsDraft() };
     render();
     if (autoMsg) { setTimeout(() => toast(autoMsg), 400); setTimeout(() => { autoMsg = ""; }, 500); }

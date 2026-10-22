@@ -18,6 +18,11 @@ service cloud.firestore {
             || request.resource.data.get('base', null) == resource.data.updatedAt);
     }
 
+    // 기록 백업 (하루 한 번, 최근 14일): 나만 읽고 쓰기
+    match /users/{userId}/backups/{day} {
+      allow read, write: if isMe(userId);
+    }
+
     // 친구 보기용 공개 정보: 로그인한 사람은 모두 읽기, 내 것만 쓰기
     match /public/{userId} {
       allow read: if signedIn();
