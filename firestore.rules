@@ -9,7 +9,8 @@ service cloud.firestore {
 
     // 내 기록: 나만 읽고 쓰기
     // 고칠 때는 "내가 본 최신 버전(base)"이 서버의 최신 버전(updatedAt)과 같아야만 저장됨
-    // → 오래 열어 둔 다른 기기의 화면이 새 기록을 덮어쓰지 못함
+    // → 오래 열어 둔 다른 기기나, 늦게 보내진 옛 저장(같은 사이트의 FocusFill 탭이 대신 보낸 것 포함)이
+    //   새 기록을 덮어쓰지 못함
     match /users/{userId} {
       allow read, create, delete: if isMe(userId);
       allow update: if isMe(userId)
@@ -43,9 +44,15 @@ service cloud.firestore {
       return (exists(a) && get(a).data.status == 'accepted') || (exists(b) && get(b).data.status == 'accepted');
     }
 
-    // 비공개: 성별, 디톡스 대상, 종료 이유, 메모, 참기 기록, 일기 → 나만
+    // 비공개: 성별, 디톡스 대상, 규칙, 리셋 이유, 메모, 참기 기록, 일기 → 나만
+    // 내 문서: 지금 앱(v1.7.8 이상)은 저장할 때마다 _w(저장 시각)나 _ep(초기화 표시)를 바꿔요.
+    // 예전 버전 앱이나 다른 앱(같은 사이트의 ProFill)이 늦게 보낸 옛 저장은 이 칸을 안 바꾸므로 막아요
+    // → 옛 경험치·옛 기록으로 덮어써지는 일이 서버에서부터 일어나지 않아요.
     match /focusfill_users/{userId} {
-      allow read, write: if isMe(userId);
+      allow read, create, delete: if isMe(userId);
+      allow update: if isMe(userId)
+        && (request.resource.data.get('_w', 0) != resource.data.get('_w', 0)
+          || request.resource.data.get('_ep', '') != resource.data.get('_ep', ''));
     }
     match /focusfill_users/{userId}/{document=**} {
       allow read, write: if isMe(userId);
