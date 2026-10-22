@@ -9,9 +9,9 @@ import {
   collection, getDocs, query, where, onSnapshot, getDocFromCache, getDocFromServer,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 import { firebaseConfig } from "./firebase-config.js";
-import { GOALS, KINDS } from "./data.js?v=1.5.2";
+import { GOALS, KINDS } from "./data.js?v=1.6.0";
 
-const APP_VERSION = "1.5.2";
+const APP_VERSION = "1.6.0";
 /* ---------- Firebase ---------- */
 const fbApp = initializeApp(firebaseConfig);
 const auth = getAuth(fbApp);
@@ -19,6 +19,7 @@ const db = initializeFirestore(fbApp, {
   localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
   ignoreUndefinedProperties: true,
 });
+window.__pfBooted = true;   // index.html의 '열리지 않아요' 안내가 앱이 정상으로 시작됐는지 알 수 있게
 const EMAIL_DOMAIN = "iasa-protein.app"; // 아이디를 이메일 형식으로 바꿀 때만 쓰임 (메일은 보내지 않음)
 
 /* ---------- 인터넷 없이 열기 ---------- */
@@ -33,20 +34,30 @@ if ("serviceWorker" in navigator) {
     if (!hadController || reloaded) return;
     reloaded = true;
     flushSave();
-    setTimeout(() => location.reload(), 300);
+    // 저장이나 기록 합치기가 끝난 뒤에 새로고침 (최대 10초 기다림)
+    const t0 = Date.now();
+    const go = () => (writing || reloading || needReload || saveTimer) && Date.now() - t0 < 10000 ? setTimeout(go, 300) : location.reload();
+    setTimeout(go, 300);
   });
   if (document.readyState === "complete") reg(); else window.addEventListener("load", reg);
 }
+// 인터넷이 끊겼거나, 와이파이는 잡혔는데 저장이 한참 서버로 안 갈 때 위에 띠를 보여 줌
+let writeSince = 0;
 function updateOnline() {
   let bar = document.getElementById("offline");
   if (!bar) {
     bar = document.createElement("div");
     bar.id = "offline"; bar.className = "offline-bar"; bar.setAttribute("role", "status");
-    bar.textContent = "인터넷 없이 쓰는 중이에요. 체크한 건 연결되면 자동으로 저장돼요.";
     document.body.appendChild(bar);
   }
-  bar.classList.toggle("show", navigator.onLine === false);
+  const off = navigator.onLine === false;
+  const stuck = !off && writeSince && Date.now() - writeSince > 5000;
+  bar.textContent = off ? "인터넷 없이 쓰는 중이에요. 체크한 건 연결되면 자동으로 저장돼요."
+    : "인터넷이 불안정해요. 체크한 건 이 기기에 있고, 연결되면 자동으로 저장돼요.";
+  bar.classList.toggle("show", off || !!stuck);
 }
+setInterval(updateOnline, 2000);
+// 인터넷이 돌아오면: 보내지 못한 저장은 Firebase가 순서대로 보내고, 그다음 서버 기록을 알려 줌(applyRemote에서 합침)
 window.addEventListener("online", () => { updateOnline(); if (S) fetchMeals(); });
 window.addEventListener("offline", updateOnline);
 if (document.readyState === "complete") updateOnline(); else window.addEventListener("load", updateOnline);
@@ -190,11 +201,166 @@ function save() {
 let baseAt = 0;
 const setBase = (d) => { baseAt = Number(d?.updatedAt) || 0; };
 // 서버 기록으로 통째로 바꿀 때 (되돌리기도 지움: 옛 상태로 덮어쓰지 않게)
-function adopt(data) { S = migrate(data); setBase(S); undoFn = null; applyTheme(S.theme); }
-// 서버에서 직접 받기 (기기에 저장된 옛 사본 말고). 안 되면 보통 방법으로
+function adopt(data) { S = migrate(data); setBase(S); keepShared(data); undoFn = null; applyTheme(S.theme); }
+
+/* ---------- 두 기기 기록 합치기 ----------
+   인터넷이 끊긴 동안 이 기기에서 한 것과, 그사이 다른 기기가 서버에 저장한 것을 둘 다 살림.
+   shared = 두 기기가 마지막으로 함께 본 서버 기록 (이 기기에 따로 보관해서 앱을 다시 열어도 남음) */
+let shared = null;
+const sharedKey = () => `pf-shared-${uid}`;
+function keepShared(d) {
+  shared = migrate(JSON.parse(JSON.stringify(d)));   // 이 기기 기록과 같은 모양으로 맞춰 둬야 비교가 정확함
+  try { localStorage.setItem(sharedKey(), JSON.stringify(shared)); } catch (e) { /* 저장 공간이 없으면 메모리에만 */ }
+}
+function loadShared() {
+  try { return JSON.parse(localStorage.getItem(sharedKey())); } catch (e) { return null; }
+}
+const isObj = (v) => !!v && typeof v === "object" && !Array.isArray(v);
+const same = (a, b) => stable(a) === stable(b);
+const listKey = (arr) => {
+  const x = arr.find(isObj);
+  if (!x) return null;
+  return x.id != null ? "id" : x.foodId != null ? "foodId" : x.name != null ? "name" : x.n != null ? "n" : null;
+};
+const UP = new Set(["eaten", "qty", "done", "s", "e", "g"]);   // 먹은 횟수, 세트, 그날 먹은 양: 둘 다 바꿨으면 큰 쪽   // 둘 다 바꿨으면 큰 쪽 (체크는 한 기기에서라도 했으면 남김)
+function merge3(b, l, r, key = "") {
+  if (same(l, r)) return l;
+  if (same(l, b)) return r;
+  if (same(r, b)) return l;
+  if (key === "today" || key === "yesterday") return mergeDay(b, l, r);
+  if (Array.isArray(l) && Array.isArray(r)) {
+    const k = listKey(l) || listKey(r);
+    if (k && key === "ex") return dedupeEx(mergeList(Array.isArray(b) ? b : [], l, r, k));
+    if (k) return mergeList(Array.isArray(b) ? b : [], l, r, k);
+    if (key === "parts") return setMerge(Array.isArray(b) ? b : [], l, r);
+    if (key === "d") return r.length > l.length ? r : l;   // 세트 기록: 더 많이 한 쪽
+    return l;
+  }
+  if (isObj(l) && isObj(r)) {
+    const out = {};
+    for (const k of new Set([...Object.keys(l), ...Object.keys(r)])) {
+      const bv = isObj(b) ? b[k] : undefined;
+      if (!(k in l)) { if (!same(r[k], bv)) out[k] = r[k]; continue; }   // 이 기기에서 지움 (서버가 바꿨으면 살림)
+      if (!(k in r)) { if (!same(l[k], bv)) out[k] = l[k]; continue; }   // 서버에서 지움
+      out[k] = merge3(bv, l[k], r[k], k);
+    }
+    return out;
+  }
+  if (UP.has(key) && typeof l === "number" && typeof r === "number") return Math.max(l, r);
+  return l;
+}
+// 같은 운동이 두 기기에서 따로 만들어져 두 번 들어가면 세트를 더 많이 한 쪽만 남김
+function dedupeEx(list) {
+  return list.filter((x, i) => (x?.done || 0) > 0
+    || !list.some((y, j) => y !== x && y?.n === x?.n && ((y.done || 0) > 0 || j < i)));
+}
+function setMerge(b, l, r) {
+  const B = new Set(b.map(stable)), R = new Set(r.map(stable)), L = new Set(l.map(stable));
+  return [...l.filter((x) => R.has(stable(x)) || !B.has(stable(x))), ...r.filter((x) => !L.has(stable(x)) && !B.has(stable(x)))];
+}
+function mergeList(b, l, r, k) {
+  const bm = new Map(b.filter(isObj).map((x) => [x[k], x])), rm = new Map(r.filter(isObj).map((x) => [x[k], x])), lm = new Map(l.filter(isObj).map((x) => [x[k], x]));
+  const out = [];
+  for (const x of l) {
+    if (!isObj(x)) continue;
+    if (rm.has(x[k])) out.push(mergeItem(bm.get(x[k]), x, rm.get(x[k]), k));
+    else if (!bm.has(x[k]) || !same(x, bm.get(x[k]))) out.push(x);   // 이 기기에서 추가했거나, 서버가 지웠어도 이 기기에서 고친 것
+  }
+  for (const x of r) {
+    if (!isObj(x) || lm.has(x[k])) continue;
+    if (!bm.has(x[k]) || !same(x, bm.get(x[k]))) out.push(x);   // 서버에서 추가했거나, 이 기기가 지웠어도 서버에서 고친 것
+  }
+  return out;
+}
+// 운동 한 줄은 섞지 않고 세트를 더 많이 한 쪽을 통째로 (세트 기록과 개수가 어긋나지 않게)
+function mergeItem(b, l, r, k) {
+  if (l.d !== undefined || r.d !== undefined || l.done !== undefined || (l.n != null && l.r != null)) {   // 운동 한 줄
+    if (same(l, b)) return r;
+    if (same(r, b)) return l;
+    return (r.done ?? r.s ?? 0) > (l.done ?? l.s ?? 0) ? r : l;
+  }
+  return merge3(b, l, r, "");
+}
+// 하루 기록: 날짜가 다르면 더 최근 날, 같은 날인데 함께 본 기록이 그날이 아니면(둘 다 그날 처음) 항목을 모아서
+function mergeDay(b, l, r) {
+  if (!isObj(l) || !isObj(r)) return l || r;
+  if (l.date !== r.date) return String(l.date) > String(r.date) ? l : r;
+  if (isObj(b) && b.date === l.date) return merge3Obj(b, l, r);
+  const out = { ...r, ...l };
+  const byFood = new Map();
+  for (const x of [...(r.items || []), ...(l.items || [])]) {
+    const key = x.foodId ?? x.name;   // 오늘 식품은 foodId, 어제 칸의 식품은 이름
+    const p = byFood.get(key);
+    byFood.set(key, p ? { ...p, ...x, qty: Math.max(p.qty || 0, x.qty || 0), eaten: Math.max(p.eaten || 0, x.eaten || 0) } : x);
+  }
+  if (l.items || r.items) out.items = [...byFood.values()];
+  const byName = new Map();
+  for (const x of [...(r.ex || []), ...(l.ex || [])]) {
+    const p = byName.get(x.n);
+    byName.set(x.n, !p || (x.done || 0) >= (p.done || 0) ? x : p);
+  }
+  if (l.ex || r.ex) out.ex = [...byName.values()];
+  out.parts = setMerge([], l.parts || [], r.parts || []);
+  return out;
+}
+function merge3Obj(b, l, r) {
+  const out = {};
+  for (const k of new Set([...Object.keys(l), ...Object.keys(r)])) {
+    const bv = b[k];
+    if (!(k in l)) { if (!same(r[k], bv)) out[k] = r[k]; continue; }
+    if (!(k in r)) { if (!same(l[k], bv)) out[k] = l[k]; continue; }
+    out[k] = merge3(bv, l[k], r[k], k);
+  }
+  return out;
+}
+// 서버(다른 기기) 기록 r을 받아서 이 기기 기록과 합침. 이 기기에서 바꾼 게 없으면 그냥 서버 것
+function mergeIn(r) {
+  const mine = S;
+  const remote = stripVer(migrate(JSON.parse(JSON.stringify(r))));
+  // 함께 본 기록이 없으면(이 기기에서 처음 등) 서버와 다른 게 있는지로 판단해서, 지우지 않고 모음
+  const changed = mine && (shared ? !same(stripVer(mine), stripVer(shared)) : !same(stripVer(mine), remote));
+  if (!changed) { adopt(r); return false; }
+  let merged;
+  try {
+    merged = merge3(shared ? stripVer(shared) : undefined, stripVer(mine), remote);
+    foldDay(merged, stripVer(mine), remote);
+  } catch (e) { console.warn("merge", e); adopt(r); return false; }
+  S = migrate({ ...merged, base: r.base, updatedAt: r.updatedAt });
+  setBase(r); keepShared(r); undoFn = null; applyTheme(S.theme);
+  recordToday();
+  const differs = !same(stripVer(S), stripVer(migrate(r)));
+  if (differs) save();   // 합친 결과를 서버에 저장
+  return differs;
+}
+// 한 기기만 자정을 넘겼을 때: 다른 기기의 '오늘'(= 넘긴 쪽의 어제)에 한 것을 넘긴 쪽의 '어제 기록 마무리' 칸에 모음
+function foldDay(m, l, r) {
+  const older = [l, r].find((x) => x?.today && m.today && x.today.date < m.today.date && x.today.date === m.yesterday?.date);
+  if (!older || !m.yesterday) return;
+  const y = m.yesterday, t = older.today, day = t.date;
+  y.items = Array.isArray(y.items) ? y.items : [];
+  // 다른 기기가 그날 먹은 것: 그 기기의 기록 달력(식품 이름과 먹은 g)에서 가져옴
+  for (const f of older.history?.[day]?.f || []) {
+    if (!f?.n || !(f.g > 0)) continue;
+    const have = y.items.find((x) => x.name === f.n);
+    if (have) {
+      const n = have.g > 0 ? Math.round(f.g / have.g) : 1;
+      have.eaten = Math.max(have.eaten || 0, n);
+      have.qty = Math.max(have.qty || 1, have.eaten);
+    } else y.items.push({ name: f.n, g: r1(f.g), qty: 1, eaten: 1 });
+  }
+  y.ex = dedupeEx([...(y.ex || []), ...((t.ex || []).filter((e) => e && e.done))]);
+  y.parts = setMerge([], y.parts || [], t.parts || []);
+  // 그날 기록 달력도 모은 내용으로 (줄지는 않게)
+  const h = (m.history ||= {})[day] || { e: 0, t: y.t, f: [] };
+  const sum = y.items.reduce((a, it) => a + (it.g || 0) * (it.eaten || 0), 0) + (Number(y.extraE) || 0);
+  const fl = y.items.filter((it) => it.eaten).map((it) => ({ n: it.name, g: r1(it.g * it.eaten) }));
+  m.history[day] = { ...h, e: r1(Math.max(Number(h.e) || 0, sum)), f: fl.length >= (h.f || []).length ? fl : h.f, parts: setMerge([], h.parts || [], y.parts), ex: h.ex };
+}
+const stripVer = (d) => { if (!d) return d; const { base, updatedAt, ...rest } = d; return rest; };
+// 서버에서 직접 받기 (기기에 저장된 옛 사본 말고). 안 되면 보통 방법으로, 오래 걸리면 포기
 const fetchServerDoc = () => Promise.race([
   getDocFromServer(doc(db, "users", uid)).catch(() => getDoc(doc(db, "users", uid))),
-  new Promise((_, no) => setTimeout(() => no(new Error("timeout")), 8000)),
+  new Promise((_, no) => setTimeout(() => no(new Error("timeout")), 4000)),
 ]);
 async function flushSave() {
   if (!saveTimer || !S || !uid || deleting) return;
@@ -204,10 +370,12 @@ async function flushSave() {
   S.updatedAt = Math.max(Date.now(), baseAt + 1);
   baseAt = S.updatedAt;
   const who = uid, data = JSON.parse(JSON.stringify(S));
+  if (!writing) writeSince = Date.now();
   writing++;
   let conflict = false;
   try {
     await setDoc(doc(db, "users", who), data);
+    if (uid === who && baseAt === data.updatedAt) keepShared(data);   // 서버가 받은 기록 = 함께 본 기록
     // 내 저장 뒤에 다른 기기가 또 저장한 게 기다리고 있으면 남겨 둠
     if (!(remotePending && Number(remotePending.updatedAt) > data.updatedAt)) remotePending = null;
   } catch (e) {
@@ -215,36 +383,56 @@ async function flushSave() {
     if (e.code === "permission-denied") conflict = true;   // 서버에 더 새로운 기록이 있음
     else if (baseAt === data.updatedAt) baseAt = data.base;   // 서버에 안 들어갔으니 버전도 되돌림
     if (!conflict) toast(navigator.onLine === false ? "인터넷이 끊겨 있어요. 연결되면 다시 저장해요." : `저장하지 못했어요 (${e.code || e.message || "알 수 없는 오류"})`);
-  } finally { writing--; }
+  } finally { writing--; if (!writing) { writeSince = 0; updateOnline(); } }
   if (uid !== who) return;
-  if (conflict) { await reloadFromServer("다른 기기에서 저장한 더 새로운 기록이 있어서 그걸 불러왔어요. 방금 한 것은 다시 해 주세요."); return; }
+  // 거절되면: 아직 서버로 가는 중인 저장이 남았으면 다 끝난 뒤에 한 번만 합침
+  if (conflict) { needReload = true; keepUnsynced(); }
+  if (needReload) { if (!writing) { needReload = false; await reloadFromServer(); } return; }
   syncPublic();
 }
-// 서버의 최신 기록으로 바꿈
-async function reloadFromServer(msg) {
-  if (!uid) return false;
-  try {
-    const sn = await fetchServerDoc();
-    if (!sn.exists()) return false;
-    clearTimeout(saveTimer); saveTimer = null; remotePending = null;
-    adopt(sn.data());
-    if (ensureToday()) save();
-    render();
-    if (msg) toast(msg);
-    return true;
-  } catch (e) { console.warn("reload", e); return false; }
+// 서버에 더 새로운 기록이 있어서 저장이 거절됐을 때: 서버 기록을 받아 이 기기 기록과 합침
+let reloading = null, needReload = false;
+// 서버가 거절한(아직 합치지 못한) 이 기기 기록: 앱이 닫혀도 다음에 열 때 합칠 수 있게 보관
+const unsyncedKey = () => `pf-unsynced-${uid}`;
+function keepUnsynced() { try { localStorage.setItem(unsyncedKey(), JSON.stringify(S)); } catch (e) { /* 공간 부족 */ } }
+function takeUnsynced() {
+  try { const v = JSON.parse(localStorage.getItem(unsyncedKey())); localStorage.removeItem(unsyncedKey()); return v; } catch (e) { return null; }
+}
+function reloadFromServer() {
+  if (!uid) return Promise.resolve(false);
+  if (reloading) return reloading;   // 거절이 여러 번 와도 한 번만
+  const who = uid;
+  reloading = (async () => {
+    try {
+      const sn = await fetchServerDoc();
+      if (uid !== who || !S) return false;   // 그사이 다른 계정으로 바뀜
+      if (!sn.exists()) return false;
+      // 기기에 보내지 못한 저장이 섞인 기록이면 아직 '서버 기록'이 아님 → 조금 뒤 다시
+      if (sn.metadata?.hasPendingWrites || sn.metadata?.fromCache) { needReload = true; return false; }
+      clearTimeout(saveTimer); saveTimer = null; remotePending = null;
+      takeUnsynced();
+      const merged = mergeIn(sn.data());
+      if (ensureToday()) save();
+      softRender();
+      toast(merged ? "다른 기기에서 저장한 기록과 합쳤어요" : "다른 기기에서 저장한 기록을 불러왔어요");
+      return true;
+    } catch (e) { console.warn("reload", e); needReload = true; return false; }   // 못 받았으면 조금 뒤 다시
+    finally { reloading = null; }
+  })();
+  return reloading;
 }
 // 오래 숨어 있던 탭으로 돌아오면, 아무것도 바꾸기 전에 서버의 최신 기록부터 받아 옴
 let resuming = false, hiddenAt = 0;
 async function resume() {
   if (resuming) return;
-  if (!S || !uid || navigator.onLine === false || Date.now() - hiddenAt < 20000) { tick(); return; }
+  // 아직 서버로 가는 중인 저장이 있으면 그 결과를 기다림 (거절되면 그때 합침)
+  if (!S || !uid || navigator.onLine === false || writing || Date.now() - hiddenAt < 20000) { tick(); return; }
   resuming = true;
   try {
     const sn = await fetchServerDoc();
-    if (sn.exists() && Number(sn.data().updatedAt || 0) > baseAt) {   // 서버가 더 새것일 때만
+    if (sn.exists() && Number(sn.data().updatedAt || 0) !== baseAt && !sn.metadata?.fromCache && !sn.metadata?.hasPendingWrites) {   // 서버가 다른(새) 기록일 때만
       clearTimeout(saveTimer); saveTimer = null; remotePending = null;
-      adopt(sn.data()); render();
+      mergeIn(sn.data()); softRender();
     }
   } catch (e) { console.warn("resume", e); }
   resuming = false;
@@ -350,13 +538,7 @@ function ensureToday() {
   }
   S.today = { date: k, items, parts: [] };   // ex는 운동법에서 새로 가져옴
   // 넘겨받은 끼니는 그날 급식이 있으면 급식으로, 없으면 집밥으로 바꿈
-  const seen = new Set();
-  S.today.items = S.today.items.map((it) => {
-    const m = /^(meal|home):([123])$/.exec(it.foodId);
-    if (!m || !mealsOk) return it;   // 급식 파일을 못 받았으면 그대로 둠
-    const id = mealFood(m[2]) ? `meal:${m[2]}` : `home:${m[2]}`;
-    return { ...it, foodId: id, qty: 1 };
-  }).filter((it) => (seen.has(it.foodId) ? false : seen.add(it.foodId)));
+  S.today.items = remapMeals(S.today.items, true);
   const up = autoProgress();
   if (up.length) autoMsg = `운동법을 올렸어요: ${up.join(", ")}`;
   return true;
@@ -364,13 +546,45 @@ function ensureToday() {
 
 let mealsReady = null;
 function loadMeals() { mealsReady = fetchMeals(); return mealsReady; }
+// 끼니(급식/집밥)를 그날 급식 정보에 맞춤: 급식이 있으면 급식, 없으면 집밥 (급식 파일을 못 받았으면 그대로)
+function remapMeals(items, reset) {
+  if (!mealsOk) return items;
+  const out = items.map((it) => {
+    const m = /^(meal|home):([123])$/.exec(it.foodId);
+    if (!m) return it;
+    const id = mealFood(m[2]) ? `meal:${m[2]}` : `home:${m[2]}`;
+    return reset ? { ...it, foodId: id, qty: 1 } : id === it.foodId ? it : { ...it, foodId: id };
+  });
+  // 같은 끼니가 둘이 되면 먹은 쪽 하나만 남김 (순서는 그대로)
+  const best = new Map();
+  for (const it of out) { const p = best.get(it.foodId); if (!p || (it.eaten || 0) > (p.eaten || 0)) best.set(it.foodId, it); }
+  return out.filter((it) => best.get(it.foodId) === it);
+}
+const MEALS_KEY = "pf-meals";
 async function fetchMeals() {
+  let got = null;
   try {
-    const r = await fetch(`data/meals.json?t=${Date.now()}`, { cache: "no-store" });
-    if (r.ok) { meals = await r.json(); mealsOk = Object.keys(meals?.days || {}).length > 0; }
-  } catch (e) { /* 급식 파일이 없어도 나머지는 동작 */ }
+    // 와이파이는 잡혔는데 인터넷이 안 될 때 오래 기다리지 않게
+    const ctl = typeof AbortController === "function" ? new AbortController() : null;
+    const timer = setTimeout(() => ctl?.abort(), 6000);
+    const r = await fetch(`data/meals.json?t=${Date.now()}`, { cache: "no-store", ...(ctl ? { signal: ctl.signal } : {}) });
+    if (r.ok) got = await r.json();
+    clearTimeout(timer);
+  } catch (e) { /* 아래에서 받아 둔 사본으로 */ }
+  if (got && Object.keys(got.days || {}).length) {
+    try { localStorage.setItem(MEALS_KEY, JSON.stringify(got)); } catch (e) { /* 공간 부족 */ }
+  } else {
+    // 인터넷이 없으면 지난번에 받아 둔 급식 정보로
+    try { const old = JSON.parse(localStorage.getItem(MEALS_KEY)); if (old && Object.keys(old.days || {}).length) got = old; } catch (e) { /* 없음 */ }
+  }
+  if (got) { meals = got; mealsOk = Object.keys(meals.days || {}).length > 0; }
   mealsLoaded = true;
-  if (S) softRender();
+  if (S) {
+    // 급식 정보 없이 집밥으로 넣어 둔 끼니가 이제 급식으로 보이게 (또는 반대로)
+    const fixed = remapMeals(S.today.items, false);
+    if (!same(fixed, S.today.items)) { S.today.items = fixed; save(); }
+    softRender();
+  }
 }
 let renderPending = false;
 const isTyping = () => document.activeElement && ["INPUT", "SELECT", "TEXTAREA"].includes(document.activeElement.tagName);
@@ -611,7 +825,7 @@ function loadingHTML() {
 function render() {
   if (!uid) return renderAuth();
   if (loadError) {
-    $app.innerHTML = `<main class="center"><p>기록을 불러오지 못했어요. 인터넷 연결을 확인한 뒤 다시 시도해 주세요.</p><button class="btn primary" data-act="reload">다시 시도</button></main>`;
+    $app.innerHTML = `<main class="center"><p>${navigator.onLine === false ? "이 기기에서 처음 여는 거라 인터넷이 한 번은 필요해요. 연결한 뒤 다시 시도해 주세요." : "기록을 불러오지 못했어요. 인터넷 연결을 확인한 뒤 다시 시도해 주세요."}</p><button class="btn primary" data-act="reload">다시 시도</button></main>`;
     return;
   }
   if (!S) { $app.innerHTML = loadingHTML(); return; }
@@ -1526,7 +1740,7 @@ function checklistHTML() {
     const f = getFood(it.foodId);
     if (!f) {
       const nm = it.foodId.startsWith("meal:") ? `급식 ${MEAL_NAMES[it.foodId.slice(5)] || ""}` : "식품";
-      return `<li class="ck missing"><div class="ck-main"><span class="ck-name">${esc(nm)}</span><span class="ck-meta">${!mealsLoaded ? "불러오는 중" : "정보를 찾을 수 없어요"}</span></div>
+      return `<li class="ck missing"><div class="ck-main"><span class="ck-name">${esc(nm)}</span><span class="ck-meta">${!mealsLoaded ? "불러오는 중" : !mealsOk ? "급식 정보를 아직 못 받았어요" : "정보를 찾을 수 없어요"}</span></div>
         <span></span><span></span><span></span><button class="x" data-act="remove" data-i="${i}" aria-label="빼기">×</button></li>`;
     }
     const dots = Array.from({ length: it.qty }, (_, k) =>
@@ -1644,7 +1858,7 @@ function friendStripHTML() {
       <button class="btn small" data-act="share-on">공개하고 같이 보기</button>`;
   }
   if (friendsState === "error") {
-    return `<h2 class="fs-label">오늘 친구들</h2><span class="fs-text">친구 목록을 불러오지 못했어요.</span>
+    return `<h2 class="fs-label">오늘 친구들</h2><span class="fs-text">${navigator.onLine === false ? "인터넷이 연결되면 보여요." : "친구 목록을 불러오지 못했어요."}</span>
       <button class="link" data-act="refresh-friends">다시 시도</button>`;
   }
   const list = rankedFriends();
@@ -1666,7 +1880,7 @@ function friendStripHTML() {
 function friendsModalHTML() {
   const head = `<div class="fd-head"><h2>오늘 친구들</h2><button class="link" data-act="refresh-friends">새로고침</button></div>`;
   const close = `<div class="modal-actions"><button class="btn primary" data-act="close-modal">닫기</button></div>`;
-  if (friendsState === "error") return `${head}<p class="muted">친구 목록을 불러오지 못했어요.</p>${close}`;
+  if (friendsState === "error") return `${head}<p class="muted">${navigator.onLine === false ? "인터넷이 연결되면 보여요." : "친구 목록을 불러오지 못했어요."}</p>${close}`;
   const list = rankedFriends();
   const rows = list.map((f, i) => `
     <li class="${f.id === uid ? "me" : ""}">
@@ -2076,8 +2290,7 @@ $app.addEventListener("click", async (e) => {
     const next = remotePending && migrate(JSON.parse(JSON.stringify(remotePending)));
     remotePending = null;
     if (next && stable(next) !== stable(S)) {
-      S = next; setBase(S); undoFn = null;
-      applyTheme(S.theme);
+      mergeIn(next);
       if (ensureToday()) save();
       // 목록 순서(번호)로 가리키는 버튼은 화면이 바뀌었을 수 있으니 이번 누름은 쉬고 다시 그림
       if (!ui.modal?.draft && (b.dataset.i !== undefined || b.dataset.j !== undefined)) {
@@ -2095,7 +2308,8 @@ $app.addEventListener("click", async (e) => {
     case "auth-mode": ui.authMode = b.dataset.m; ui.authError = ""; return renderAuth();
     case "reload": location.reload(); return;
     case "logout": {
-      if (navigator.onLine === false && (saveTimer || writing)) { toast("저장하지 않은 기록이 있어요. 인터넷에 연결된 뒤 로그아웃해 주세요."); return; }
+      // 인터넷 없이 로그아웃하면 다시 로그인할 수 없고, 아직 못 보낸 기록도 남음
+      if (navigator.onLine === false || writing || needReload || reloading) { toast(navigator.onLine === false ? "인터넷이 연결된 뒤 로그아웃해 주세요. 지금 로그아웃하면 다시 로그인할 수 없어요." : "아직 저장하는 중이에요. 인터넷이 안정되면 다시 눌러 주세요."); return; }
       await Promise.race([flushSave(), new Promise((r) => setTimeout(r, 4000))]);
       await signOut(auth); return;
     }
@@ -2237,6 +2451,7 @@ $app.addEventListener("click", async (e) => {
       if (nw.length < 6) { err.textContent = "새 비밀번호는 6자 이상이어야 해요."; return; }
       if (nw !== nw2) { err.textContent = "새 비밀번호 두 개가 서로 달라요."; return; }
       if (nw === cur) { err.textContent = "지금 비밀번호와 다른 비밀번호를 정해 주세요."; return; }
+      if (navigator.onLine === false) { err.textContent = "비밀번호는 인터넷이 연결된 뒤 바꿀 수 있어요."; return; }
       if (b.disabled) return;
       b.disabled = true; b.textContent = "바꾸는 중";
       const user = auth.currentUser;
@@ -2250,6 +2465,7 @@ $app.addEventListener("click", async (e) => {
         err.textContent = ["auth/wrong-password", "auth/invalid-credential", "auth/invalid-login-credentials"].includes(e2.code) ? "지금 비밀번호가 맞지 않아요."
           : e2.code === "auth/weak-password" ? "새 비밀번호가 너무 쉬워요. 6자 이상으로 정해 주세요."
           : e2.code === "auth/too-many-requests" ? "시도가 너무 많았어요. 잠시 뒤 다시 해 주세요."
+          : e2.code === "auth/network-request-failed" ? "인터넷 연결을 확인한 뒤 다시 해 주세요."
           : `바꾸지 못했어요 (${e2.code || e2.message})`;
       }
       return;
@@ -2260,6 +2476,7 @@ $app.addEventListener("click", async (e) => {
       const pw = val("del-pw");
       const err = document.getElementById("del-err");
       if (!pw) { err.textContent = "비밀번호를 입력해 주세요."; return; }
+      if (navigator.onLine === false) { err.textContent = "계정 삭제는 인터넷이 연결된 뒤 할 수 있어요."; return; }
       if (b.disabled) return;
       b.disabled = true; b.textContent = "지우는 중";
       const user = auth.currentUser;
@@ -2267,7 +2484,8 @@ $app.addEventListener("click", async (e) => {
         await reauthenticateWithCredential(user, EmailAuthProvider.credential(user.email, pw));
       } catch (e2) {
         b.disabled = false; b.textContent = "영구 삭제";
-        err.textContent = ["auth/wrong-password", "auth/invalid-credential", "auth/invalid-login-credentials"].includes(e2.code) ? "비밀번호가 맞지 않아요." : `확인하지 못했어요 (${e2.code})`;
+        err.textContent = ["auth/wrong-password", "auth/invalid-credential", "auth/invalid-login-credentials"].includes(e2.code) ? "비밀번호가 맞지 않아요."
+          : e2.code === "auth/network-request-failed" ? "인터넷 연결을 확인한 뒤 다시 해 주세요." : `확인하지 못했어요 (${e2.code})`;
         return;
       }
       const who = user.uid;
@@ -2585,6 +2803,7 @@ document.addEventListener("keydown", (e) => {
 /* ---------- 시간 흐름 ---------- */
 function tick() {
   if (!S || resuming) return;
+  if (needReload && !writing && !reloading && navigator.onLine !== false) { needReload = false; reloadFromServer(); }
   if (remotePending) applyRemote(remotePending);
   if (renderPending) softRender();
   if (ensureToday()) {
@@ -2619,10 +2838,10 @@ let remotePending = null;
 // 다른 기기(예: 학교 컴퓨터)에서 바꾼 내용을 실시간으로 받아옴
 function applyRemote(data) {
   if (!S || writing || saveTimer) { remotePending = data; return; }
-  if (stable(data) === stable(S)) { remotePending = null; setBase(data); return; }
+  if (stable(data) === stable(S)) { remotePending = null; setBase(data); keepShared(data); return; }
   if (isTyping() || ui.modal?.draft) { remotePending = data; return; }
   remotePending = null;
-  adopt(data);
+  mergeIn(data);
   if (ensureToday()) save();
   render();
   watchFriends();
@@ -2640,12 +2859,24 @@ onAuthStateChanged(auth, async (user) => {
   uid = user.uid; S = null; render();
   try {
     const ref = doc(db, "users", uid);
-    const userDoc = navigator.onLine === false ? getDocFromCache(ref).catch(() => getDoc(ref)) : getDoc(ref);
+    // 인터넷이 없거나 느리면(와이파이만 잡히고 인터넷이 안 될 때) 4초 뒤 기기에 저장된 기록으로 열기
+    const fromServer = navigator.onLine === false ? Promise.reject(new Error("offline"))
+      : Promise.race([getDoc(ref), new Promise((_, no) => setTimeout(() => no(new Error("slow")), 4000))]);
+    const userDoc = fromServer.catch(() => getDocFromCache(ref)).catch(() => getDoc(ref));
     const [snap] = await Promise.all([userDoc, mealsReady || loadMeals()]);
     if (uid !== user.uid) return;
     const isNew = !snap.exists();
     S = isNew ? freshData(pendingNick || user.email.split("@")[0]) : migrate(snap.data());
     setBase(isNew ? null : S);
+    // 함께 본 기록: 서버에서 바로 받았으면 그것, 기기 사본(보내지 못한 저장이 섞였을 수 있음)이면 보관해 둔 것
+    const prevShared = isNew ? null : loadShared();   // 지난번에 함께 본 기록 (합치지 못한 기록이 있으면 이걸 기준으로)
+    if (isNew) shared = null;
+    else if (!snap.metadata?.fromCache && !snap.metadata?.hasPendingWrites) keepShared(snap.data());
+    else shared = loadShared() || (snap.metadata?.hasPendingWrites ? null : JSON.parse(JSON.stringify(snap.data())));
+    if (!isNew && !snap.metadata?.fromCache) {
+      const left = takeUnsynced();
+      if (left && Number(left.updatedAt || 0) !== Number(snap.data().updatedAt || 0)) { shared = prevShared; S = migrate(left); mergeIn(snap.data()); }
+    }
     applyTheme(S.theme);
     if (ensureToday() || isNew) save();
     if (!S.weight) ui.modal = { type: "settings", first: true, draft: settingsDraft() };
